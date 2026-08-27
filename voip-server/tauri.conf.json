@@ -1,0 +1,25 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run build:css",
+    "beforeBuildCommand": "npm run build:css",
+    "frontendDist": "./dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Serwer VoIP Pracowni",
+        "width": 950,
+        "height": 700,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "identifier": "com.pracownia.voip.server",
+  "version": "1.0.0",
+  "productName": "Serwer VoIP"
+}

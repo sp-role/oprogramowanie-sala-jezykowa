@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <title>VoIP Pracownia - Klient Ucznia</title>
+  <link href="./style.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-[#1e3a5f] to-slate-950 text-slate-800 font-sans m-0 min-h-screen flex items-center justify-center p-4 select-none">
+
+  <!-- GŁÓWNA KARTA APLIKACJI -->
+  <div class="bg-white/95 backdrop-blur-xl border border-white/30 shadow-2xl w-full max-w-[380px] rounded-3xl flex flex-col overflow-hidden transition-all duration-300">
+    
+    <!-- NAGŁÓWEK PROFILU -->
+    <div class="bg-gradient-to-r from-[#1e3a5f] to-[#152843] p-5 text-white flex items-center justify-between border-b border-[#0f1d31]">
+      <div class="flex items-center gap-3.5">
+        <div class="relative w-13 h-13 bg-white/10 border border-white/20 rounded-2xl flex items-center justify-center shadow-inner">
+          <svg class="w-7 h-7 text-white/90" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+          </svg>
+          <div class="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-amber-500 rounded-full border-2 border-[#1e3a5f] shadow-sm transition-colors duration-300" id="status-dot"></div>
+        </div>
+        <div>
+          <span class="text-[11px] font-semibold tracking-wider text-slate-300 uppercase">Stanowisko ucznia</span>
+          <h2 class="text-base font-bold text-white leading-tight truncate max-w-[170px]" id="display-name">Twój Profil</h2>
+        </div>
+      </div>
+      <div class="text-right">
+        <span id="status-badge" class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+          Szukanie...
+        </span>
+      </div>
+    </div>
+
+    <!-- ZAWARTOŚĆ KARTY -->
+    <div class="p-6 flex flex-col gap-5">
+      
+      <!-- ZMIANA NAZWY -->
+      <div>
+        <label class="block text-xs font-semibold text-slate-600 mb-1.5">Twoje imię i nazwisko</label>
+        <div class="flex gap-2">
+          <input type="text" id="username-input" placeholder="Wpisz np. Jan K." class="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#1e3a5f] focus:ring-2 focus:ring-[#1e3a5f]/20 transition">
+          <button onclick="saveUsername()" class="bg-[#1e3a5f] hover:bg-[#152843] active:scale-95 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-sm transition">
+            Zapisz
+          </button>
+        </div>
+      </div>
+
+      <!-- KAFELKI STATUSU (2x2 GRID) -->
+      <div class="grid grid-cols-2 gap-2.5 text-xs">
+        <div class="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 flex flex-col justify-between">
+          <span class="text-slate-400 font-medium">Serwer VoIP</span>
+          <span id="server-ip" class="font-mono font-bold text-slate-700 text-sm mt-1 truncate">---</span>
+        </div>
+        <div class="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 flex flex-col justify-between">
+          <span class="text-slate-400 font-medium">Pokój roboczy</span>
+          <span id="group-name" class="font-bold text-[#1e3a5f] text-sm mt-1 truncate">Poczekalnia</span>
+        </div>
+      </div>
+      
+      <!-- WSKAŹNIK AKTYWNOŚCI MIKROFONU (VAD) -->
+      <div class="bg-slate-50/70 border border-slate-200 rounded-2xl p-3.5 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div id="mic-icon-box" class="w-8 h-8 rounded-xl bg-slate-200 text-slate-400 flex items-center justify-center transition-colors duration-200">
+            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24">
+              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7z"/>
+            </svg>
+          </div>
+          <div>
+            <div id="mic-status-label" class="text-xs font-semibold text-slate-500">Czuwanie (VAD)</div>
+            <div class="text-[11px] text-slate-400">Automatyczna bramka szumów</div>
+          </div>
+        </div>
+        <!-- PASKI DŹWIĘKOWE -->
+        <div class="flex items-center gap-1 h-5" id="audio-bars-container">
+          <div class="w-1.5 h-2 bg-slate-300 rounded-full transition-all duration-150" id="bar-1"></div>
+          <div class="w-1.5 h-3 bg-slate-300 rounded-full transition-all duration-150" id="bar-2"></div>
+          <div class="w-1.5 h-4 bg-slate-300 rounded-full transition-all duration-150" id="bar-3"></div>
+          <div class="w-1.5 h-2 bg-slate-300 rounded-full transition-all duration-150" id="bar-4"></div>
+        </div>
+      </div>
+
+      <!-- PRZYCISK ZGŁASZANIA SIĘ -->
+      <button onclick="raiseHand()" id="raise-hand-btn" class="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:scale-[0.98] text-white font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2.5 transition-all duration-200 cursor-pointer">
+        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+          <path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/>
+        </svg>
+        <span class="text-sm font-bold tracking-wide">Potrzebuję pomocy nauczyciela</span>
+      </button>
+
+    </div>
+  </div>
+
+  <!-- MODAL POWITALNY / WYMÓG PODANIA IMIENIA -->
+  <div id="join-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+    <div class="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-xs w-full p-6 text-center">
+      <div class="w-14 h-14 bg-[#1e3a5f]/10 border border-[#1e3a5f]/20 rounded-2xl mx-auto flex items-center justify-center mb-3 text-[#1e3a5f]">
+        <svg class="w-7 h-7 fill-current" viewBox="0 0 24 24">
+          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+        </svg>
+      </div>
+      <h2 class="text-lg font-bold text-slate-800">Witaj w Pracowni!</h2>
+      <p class="text-xs text-slate-500 mt-1 mb-4">Wpisz swoje imię i nazwisko, aby połączyć się z nauczycielem.</p>
+      
+      <input type="text" id="join-name-input" placeholder="np. Jan Kowalski"
+        class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm text-center text-slate-800 font-semibold focus:outline-none focus:border-[#1e3a5f] focus:ring-2 focus:ring-[#1e3a5f]/20 mb-4"
+        onkeydown="if(event.key==='Enter') confirmJoin()">
+      
+      <button onclick="confirmJoin()" class="w-full bg-[#16a34a] hover:bg-[#15803d] active:scale-[0.98] text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-600/20 text-sm transition flex items-center justify-center gap-2 cursor-pointer">
+        <span>Dołącz do lekcji</span>
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

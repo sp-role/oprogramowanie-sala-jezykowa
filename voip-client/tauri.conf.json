@@ -1,0 +1,27 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run build:css",
+    "beforeBuildCommand": "npm run build:css",
+    "frontendDist": "./dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Aplikacja Ucznia VoIP",
+        "width": 480,
+        "height": 600,
+        "minWidth": 400,
+        "minHeight": 520,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "identifier": "com.pracownia.voip.client",
+  "version": "1.0.0",
+  "productName": "VoIP Client"
+}

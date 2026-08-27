@@ -1,0 +1,24 @@
+[package]
+name = "voip-server"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "voip-server"
+path = "src/main.rs"
+
+[dependencies]
+is_elevated = "0.1.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+byteorder = "1.4"
+tauri = { version = "2", features = [] }
+cpal = "0.15"
+mdns-sd = "0.11"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[profile.release]
+panic = "abort"
+strip = true

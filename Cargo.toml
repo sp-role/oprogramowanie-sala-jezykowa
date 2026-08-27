@@ -1,0 +1,6 @@
+﻿[workspace]
+members = [
+    "voip-client",
+    "voip-server",
+]
+resolver = "2"

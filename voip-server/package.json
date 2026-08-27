@@ -1,0 +1,14 @@
+{
+  "name": "voip-server",
+  "version": "1.0.0",
+  "main": "src/main.rs",
+  "scripts": {
+    "tauri": "tauri",
+    "build:css": "npx tailwindcss -i ./dist/input.css -o ./dist/style.css --minify",
+    "dev:css": "npx tailwindcss -i ./dist/input.css -o ./dist/style.css --watch"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "tailwindcss": "^3.4.0"
+  }
+}

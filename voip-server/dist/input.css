@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+tr {
+  transition: background-color 0.2s ease;
+}
+
+tr:hover {
+  background-color: rgba(63, 63, 70, 0.4);
+}
+
+button:active {
+  transform: scale(0.98);
+}
