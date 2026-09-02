@@ -1,5 +1,8 @@
-﻿mod audio;
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod audio;
 mod commands;
+mod licensing;
 mod network;
 mod state;
 
@@ -16,11 +19,15 @@ pub fn run() {
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
             commands::check_admin,
+            commands::check_firewall_rule,
             commands::add_firewall_rule,
             commands::assign_client_room,
             commands::set_broadcast,
             commands::set_listen_room,
-            commands::clear_hand
+            commands::clear_hand,
+            commands::get_hardware_id,
+            commands::check_activation,
+            commands::activate_license
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

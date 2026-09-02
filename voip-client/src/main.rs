@@ -1,5 +1,6 @@
 mod audio;
 mod commands;
+mod licensing;
 mod network;
 mod state;
 
@@ -19,7 +20,10 @@ pub fn run() {
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
             commands::set_username,
-            commands::raise_hand
+            commands::raise_hand,
+            commands::get_hardware_id,
+            commands::check_activation,
+            commands::activate_license
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

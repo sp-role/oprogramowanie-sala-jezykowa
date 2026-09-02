@@ -1,6 +1,7 @@
-﻿let roomsList = [];
+let roomsList = [];
 let globalClientsData = [];
 let activeListenRoom = null;
+let currentHardwareId = '';
 
 function getTauri() {
   return window.__TAURI__
@@ -41,6 +42,133 @@ function showToast(message, type = 'info') {
     toast.classList.add('translate-y-4', 'opacity-0');
     setTimeout(() => toast.remove(), 300);
   }, 3500);
+}
+
+// -------------------------------------------------------------
+// LOGIKA AKTYWACJI SERWERA I OCHRONY PRZED KOPIOWANIEM
+// -------------------------------------------------------------
+async function checkActivationStatus() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) {
+    document.getElementById('start-modal')?.classList.remove('hidden');
+    return true;
+  }
+
+  try {
+    const isAct = await tauri.invoke('check_activation');
+    currentHardwareId = await tauri.invoke('get_hardware_id');
+    const hwElem = document.getElementById('server-hw-id');
+    if (hwElem) hwElem.innerText = currentHardwareId;
+
+    if (!isAct) {
+      document.getElementById('activation-modal')?.classList.remove('hidden');
+      document.getElementById('start-modal')?.classList.add('hidden');
+      return false;
+    } else {
+      document.getElementById('activation-modal')?.classList.add('hidden');
+      document.getElementById('start-modal')?.classList.remove('hidden');
+      return true;
+    }
+  } catch (e) {
+    console.error('Błąd sprawdzania aktywacji:', e);
+    document.getElementById('start-modal')?.classList.remove('hidden');
+    return true;
+  }
+}
+
+async function copyHardwareId() {
+  if (!currentHardwareId) return;
+  try {
+    await navigator.clipboard.writeText(currentHardwareId);
+    const btn = document.getElementById('copy-hw-btn');
+    if (btn) {
+      const orig = btn.innerText;
+      btn.innerText = 'Skopiowano!';
+      btn.classList.add('text-emerald-600');
+      setTimeout(() => {
+        btn.innerText = orig;
+        btn.classList.remove('text-emerald-600');
+      }, 2000);
+    }
+  } catch (err) {
+    console.error('Błąd kopiowania:', err);
+  }
+}
+
+async function submitActivation() {
+  const input = document.getElementById('activation-code-input');
+  const errorMsg = document.getElementById('activation-error-msg');
+  const btn = document.getElementById('submit-act-btn');
+  const serverUrlInput = document.getElementById('license-server-url');
+  const code = (input?.value || '').trim().toUpperCase();
+
+  if (!code) {
+    if (errorMsg) {
+      errorMsg.innerText = 'Wpisz kod aktywacyjny (np. ROLE-XXXX-XXXX).';
+      errorMsg.classList.remove('hidden');
+    }
+    return;
+  }
+
+  const serverUrl = (serverUrlInput?.value || '').trim() || localStorage.getItem('voip_license_server_url') || 'http://localhost/php-licensing-server/api.php';
+  localStorage.setItem('voip_license_server_url', serverUrl);
+
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>Weryfikacja kodu...</span>';
+  }
+
+  try {
+    let token = null;
+
+    // Próba weryfikacji online przez serwer PHP
+    try {
+      const response = await fetch(serverUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'activate',
+          code: code,
+          hardware_id: currentHardwareId,
+          computer_name: 'Panel Nauczyciela (Serwer)'
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.status === 'success') {
+        token = data.token;
+      } else if (data && data.message) {
+        throw new Error(data.message);
+      }
+    } catch (netErr) {
+      if (netErr.message && (netErr.message.includes('użyty') || netErr.message.includes('innym komputerze') || netErr.message.includes('Nieprawidłowy kod'))) {
+        throw netErr;
+      }
+      console.warn('Tryb offline/błąd połączenia z serwerem PHP:', netErr);
+    }
+
+    const res = await tauri.invoke('activate_license', { code, token });
+    if (errorMsg) errorMsg.classList.add('hidden');
+    document.getElementById('activation-modal')?.classList.add('hidden');
+    document.getElementById('start-modal')?.classList.remove('hidden');
+    showToast(res, 'success');
+  } catch (err) {
+    if (errorMsg) {
+      errorMsg.innerText = err.message || err || 'Niepoprawny kod aktywacyjny dla tego komputera!';
+      errorMsg.classList.remove('hidden');
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `
+        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <span>Aktywuj Serwer</span>
+      `;
+    }
+  }
 }
 
 function selectRoomPreset(count) {
@@ -204,7 +332,7 @@ async function handleFirewall() {
     const res = await tauri.invoke('add_firewall_rule');
     showToast(res, 'success');
   } catch (err) {
-    showToast('Błąd reguły zapory: ' + err, 'warning');
+    showToast(err, 'warning');
   }
 }
 
@@ -313,3 +441,7 @@ function updateUIWithData(clients) {
     </div>
   `;
 }
+
+window.addEventListener('DOMContentLoaded', () => {
+  checkActivationStatus();
+});
