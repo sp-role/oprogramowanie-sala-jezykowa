@@ -5,11 +5,18 @@ use crate::state::{PORT_DISCOVERY, SharedClientState};
 
 #[tauri::command]
 pub fn set_username(name: String, state: State<'_, SharedClientState>) {
-    state.lock().unwrap().username = name;
+    if !licensing::is_activated() {
+        return;
+    }
+    let mut st = state.lock().unwrap();
+    st.username = name;
 }
 
 #[tauri::command]
 pub fn raise_hand(state: State<'_, SharedClientState>) {
+    if !licensing::is_activated() {
+        return;
+    }
     let st = state.lock().unwrap();
     if let Some(ip) = &st.server_ip {
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {

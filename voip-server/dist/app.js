@@ -50,19 +50,21 @@ function showToast(message, type = 'info') {
 async function checkActivationStatus() {
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) {
-    document.getElementById('start-modal')?.classList.remove('hidden');
-    return true;
+    document.getElementById('activation-modal')?.classList.remove('hidden');
+    document.getElementById('start-modal')?.classList.add('hidden');
+    return false;
   }
 
   try {
-    const isAct = await tauri.invoke('check_activation');
     currentHardwareId = await tauri.invoke('get_hardware_id');
     const hwElem = document.getElementById('server-hw-id');
     if (hwElem) hwElem.innerText = currentHardwareId;
 
+    const isAct = await tauri.invoke('check_activation');
     if (!isAct) {
       document.getElementById('activation-modal')?.classList.remove('hidden');
       document.getElementById('start-modal')?.classList.add('hidden');
+      document.getElementById('main-dashboard')?.classList.add('opacity-0', 'pointer-events-none');
       return false;
     } else {
       document.getElementById('activation-modal')?.classList.add('hidden');
@@ -71,8 +73,9 @@ async function checkActivationStatus() {
     }
   } catch (e) {
     console.error('Błąd sprawdzania aktywacji:', e);
-    document.getElementById('start-modal')?.classList.remove('hidden');
-    return true;
+    document.getElementById('activation-modal')?.classList.remove('hidden');
+    document.getElementById('start-modal')?.classList.add('hidden');
+    return false;
   }
 }
 
@@ -191,7 +194,24 @@ function adjustRooms(delta) {
   selectRoomPreset(val);
 }
 
-function startServerAction() {
+async function startServerAction() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    try {
+      const isAct = await tauri.invoke('check_activation');
+      if (!isAct) {
+        document.getElementById('start-modal')?.classList.add('hidden');
+        document.getElementById('activation-modal')?.classList.remove('hidden');
+        showToast('Wymagana jest aktywacja serwera!', 'warning');
+        return;
+      }
+    } catch (err) {
+      document.getElementById('start-modal')?.classList.add('hidden');
+      document.getElementById('activation-modal')?.classList.remove('hidden');
+      return;
+    }
+  }
+
   const numRooms = parseInt(document.getElementById('rooms-count-input').value) || 4;
   roomsList = [];
   for (let i = 1; i <= numRooms; i++) roomsList.push(`Pokój ${i}`);

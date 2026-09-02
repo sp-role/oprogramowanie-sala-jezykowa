@@ -80,7 +80,7 @@ pub fn verify_activation_code(hardware_id: &str, code: &str) -> bool {
 
 fn get_license_file_path() -> PathBuf {
     let base_dir = get_app_dir();
-    base_dir.join("sp_role_voip_license.lic")
+    base_dir.join("sp_role_voip_client.lic")
 }
 
 fn get_app_dir() -> PathBuf {

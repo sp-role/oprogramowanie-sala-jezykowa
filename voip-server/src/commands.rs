@@ -169,14 +169,15 @@ pub fn add_firewall_rule() -> Result<String, String> {
         Ok("Konfiguracja zapory nie jest wymagana na tym systemie.".to_string())
     }
 }
+
 #[tauri::command]
-pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServerState>) {
+pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
     let mut st = state.lock().unwrap();
-    let old_group = st.ip_to_group.get(&ip).cloned();
-    if let Some(old) = old_group {
-        if let Some(members) = st.groups.get_mut(&old) {
-            members.retain(|m_ip| *m_ip != ip);
-        }
+    for (_, members) in st.groups.iter_mut() {
+        members.retain(|x| x != &ip);
     }
     if room != "Brak" {
         st.groups.entry(room.clone()).or_insert_with(Vec::new).push(ip.clone());
@@ -189,23 +190,36 @@ pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServe
             let _ = socket.send_to(msg.as_bytes(), target_addr);
         }
     }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_broadcast(active: bool, state: State<'_, SharedServerState>) {
+pub fn set_broadcast(active: bool, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
     state.lock().unwrap().is_broadcasting = active;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn set_listen_room(room: Option<String>, state: State<'_, SharedServerState>) {
+pub fn set_listen_room(room: Option<String>, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
     state.lock().unwrap().listening_room = room;
+    Ok(())
 }
 
 #[tauri::command]
-pub fn clear_hand(ip: String, state: State<'_, SharedServerState>) {
+pub fn clear_hand(ip: String, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
     if let Some(stat) = state.lock().unwrap().client_stats.get_mut(&ip) {
         stat.hand_raised = false;
     }
+    Ok(())
 }
 
 #[tauri::command]

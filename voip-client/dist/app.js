@@ -110,16 +110,21 @@ function saveAvatarSelection() {
 // -------------------------------------------------------------
 async function checkActivationStatus() {
   const tauri = getTauri();
-  if (!tauri || !tauri.invoke) return true;
+  if (!tauri || !tauri.invoke) {
+    document.getElementById('activation-modal')?.classList.remove('hidden');
+    document.getElementById('join-modal')?.classList.add('hidden');
+    return false;
+  }
 
   try {
-    const isAct = await tauri.invoke('check_activation');
     currentHardwareId = await tauri.invoke('get_hardware_id');
     const hwElem = document.getElementById('client-hw-id');
     if (hwElem) hwElem.innerText = currentHardwareId;
 
+    const isAct = await tauri.invoke('check_activation');
     if (!isAct) {
       document.getElementById('activation-modal')?.classList.remove('hidden');
+      document.getElementById('join-modal')?.classList.add('hidden');
       return false;
     } else {
       document.getElementById('activation-modal')?.classList.add('hidden');
@@ -127,7 +132,9 @@ async function checkActivationStatus() {
     }
   } catch (e) {
     console.error('Błąd sprawdzania aktywacji:', e);
-    return true;
+    document.getElementById('activation-modal')?.classList.remove('hidden');
+    document.getElementById('join-modal')?.classList.add('hidden');
+    return false;
   }
 }
 

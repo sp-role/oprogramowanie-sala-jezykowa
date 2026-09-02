@@ -11,7 +11,7 @@ pub fn discover_server(state: SharedClientState) {
     loop {
         {
             let st = state.lock().unwrap();
-            if !st.is_registered() || st.server_ip.is_some() {
+            if !crate::licensing::is_activated() || !st.is_registered() || st.server_ip.is_some() {
                 drop(st);
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
@@ -42,7 +42,7 @@ pub fn discover_server_mdns(state: SharedClientState) {
                     addrs.sort_by_key(|a| if a.contains(':') { 1 } else { 0 });
                     if let Some(ip) = addrs.first() {
                         let mut st = state.lock().unwrap();
-                        if st.is_registered() && st.server_ip.is_none() {
+                        if crate::licensing::is_activated() && st.is_registered() && st.server_ip.is_none() {
                             st.server_ip = Some(ip.clone());
                         }
                     }
@@ -56,7 +56,14 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
     loop {
         std::thread::sleep(Duration::from_millis(150));
         let st = state.lock().unwrap();
-        let payload = if !st.is_registered() {
+        let payload = if !crate::licensing::is_activated() {
+            ClientStatusPayload {
+                connected: false,
+                server_ip: "Wymagana aktywacja".to_string(),
+                group: "Zablokowany".to_string(),
+                is_speaking: false,
+            }
+        } else if !st.is_registered() {
             ClientStatusPayload {
                 connected: false,
                 server_ip: "Wpisz imię i nazwisko".to_string(),

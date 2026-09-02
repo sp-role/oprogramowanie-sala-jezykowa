@@ -49,8 +49,8 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket) {
             }
 
             let mut st = state.lock().unwrap();
-            if !st.is_registered() {
-                return; // Nie wysyłaj żadnych pakietów do czasu wprowadzenia imienia
+            if !crate::licensing::is_activated() || !st.is_registered() {
+                return; // Nie wysyłaj żadnych pakietów do czasu aktywacji i wprowadzenia imienia
             }
 
             if let Some(ref server_ip) = st.server_ip {

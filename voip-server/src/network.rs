@@ -14,6 +14,10 @@ pub fn run_discovery_server(state: SharedServerState) {
     let socket = UdpSocket::bind(("0.0.0.0", PORT_DISCOVERY)).expect("Błąd portu discovery");
     let mut buf = [0u8; 32];
     loop {
+        if !crate::licensing::is_activated() {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        }
         if let Ok((size, addr)) = socket.recv_from(&mut buf) {
             if size >= 13 && &buf[..13] == b"VOIP_DISCOVER" {
                 let _ = socket.send_to(b"VOIP_HERE", addr);
@@ -55,6 +59,10 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
     let socket = UdpSocket::bind(("0.0.0.0", PORT_AUDIO)).expect("Błąd portu audio");
     let mut buf = [0u8; 8192];
     loop {
+        if !crate::licensing::is_activated() {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        }
         if let Ok((size, addr)) = socket.recv_from(&mut buf) {
             let sender_ip = addr.ip().to_string();
             let recv_time = current_time();
@@ -166,6 +174,9 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
 pub fn run_dashboard_updater(app_handle: AppHandle, state: SharedServerState) {
     loop {
         std::thread::sleep(Duration::from_millis(200));
+        if !crate::licensing::is_activated() {
+            continue;
+        }
         let now = current_time();
         let mut st = state.lock().unwrap();
 
