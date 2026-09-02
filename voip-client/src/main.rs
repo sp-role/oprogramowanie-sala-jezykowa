@@ -3,6 +3,7 @@ mod commands;
 mod licensing;
 mod network;
 mod state;
+mod updater;
 
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
@@ -23,7 +24,10 @@ pub fn run() {
             commands::raise_hand,
             commands::get_hardware_id,
             commands::check_activation,
-            commands::activate_license
+            commands::activate_license,
+            commands::get_app_version,
+            commands::check_for_updates,
+            commands::install_update
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

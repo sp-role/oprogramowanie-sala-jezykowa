@@ -462,6 +462,183 @@ function updateUIWithData(clients) {
   `;
 }
 
+// -------------------------------------------------------------
+// SYSTEM AKTUALIZACJI APLIKACJI (FTP / HTTP)
+// -------------------------------------------------------------
+let pendingUpdateInfo = null;
+
+async function initAppVersion() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    const version = await tauri.invoke('get_app_version');
+    const badge = document.getElementById('header-version-badge');
+    const modalV = document.getElementById('update-modal-current-v');
+    if (badge) badge.innerText = `v${version}`;
+    if (modalV) modalV.innerText = `v${version}`;
+  } catch (err) {
+    console.error('Błąd pobierania wersji aplikacji:', err);
+  }
+}
+
+function openUpdateModal() {
+  const modal = document.getElementById('update-modal');
+  const input = document.getElementById('update-server-url-input');
+  const savedUrl = localStorage.getItem('voip_update_url') || '';
+  if (input && !input.value) {
+    input.value = savedUrl;
+  }
+  modal?.classList.remove('hidden');
+}
+
+function closeUpdateModal() {
+  document.getElementById('update-modal')?.classList.add('hidden');
+}
+
+async function checkForUpdates(manual = false) {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  const input = document.getElementById('update-server-url-input');
+  const updateUrl = (input?.value || '').trim() || localStorage.getItem('voip_update_url');
+
+  if (!updateUrl) {
+    if (manual) showToast('Wpisz adres serwera aktualizacji FTP lub HTTP (np. http://.../version.json)', 'warning');
+    return;
+  }
+
+  localStorage.setItem('voip_update_url', updateUrl);
+
+  const btnCheck = document.getElementById('btn-check-updates');
+  const statusBox = document.getElementById('update-status-box');
+  const alertBanner = document.getElementById('update-alert-banner');
+  const changelogBox = document.getElementById('update-changelog-box');
+  const changelogText = document.getElementById('update-changelog-text');
+  const btnInstall = document.getElementById('btn-install-update');
+
+  if (btnCheck) {
+    btnCheck.disabled = true;
+    btnCheck.innerText = 'Sprawdzanie...';
+  }
+
+  try {
+    const info = await tauri.invoke('check_for_updates', { updateUrl });
+    pendingUpdateInfo = info;
+
+    if (statusBox) statusBox.classList.remove('hidden');
+
+    if (info.has_update) {
+      if (alertBanner) {
+        alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-emerald-50 border-emerald-300 text-emerald-900';
+        alertBanner.innerHTML = `
+          <div class="flex items-center gap-2 font-bold text-xs">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#16a34a] animate-ping"></span>
+            <span>Dostępna nowa wersja: <b>v${info.latest_version}</b></span>
+          </div>
+          <div class="text-[11px] text-emerald-700 mt-1">
+            Data wydania: ${info.release_date || 'Najnowsza'}
+          </div>
+        `;
+      }
+
+      if (info.changelog && changelogBox && changelogText) {
+        changelogText.innerText = info.changelog;
+        changelogBox.classList.remove('hidden');
+      }
+
+      if (btnInstall) {
+        btnInstall.classList.remove('hidden');
+        btnInstall.disabled = false;
+        btnInstall.innerHTML = `
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+          <span>Zainstaluj i zrestartuj teraz (v${info.latest_version})</span>
+        `;
+      }
+
+      showToast(`Dostępna nowa wersja serwera: v${info.latest_version}!`, 'info');
+      if (!manual) openUpdateModal();
+    } else {
+      if (alertBanner) {
+        alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-slate-100 border-slate-300 text-slate-700';
+        alertBanner.innerHTML = `
+          <div class="font-bold text-xs flex items-center gap-1.5">
+            <svg class="w-4 h-4 text-[#16a34a] fill-current" viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
+            <span>Posiadasz najnowszą wersję programu (v${info.current_version}).</span>
+          </div>
+        `;
+      }
+      changelogBox?.classList.add('hidden');
+      btnInstall?.classList.add('hidden');
+      if (manual) showToast('Aplikacja jest aktualna!', 'success');
+    }
+  } catch (err) {
+    console.error('Błąd sprawdzania aktualizacji:', err);
+    if (statusBox) statusBox.classList.remove('hidden');
+    if (alertBanner) {
+      alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-red-50 border-red-200 text-red-700';
+      alertBanner.innerText = `Błąd: ${err}`;
+    }
+    if (manual) showToast(`Błąd aktualizacji: ${err}`, 'warning');
+  } finally {
+    if (btnCheck) {
+      btnCheck.disabled = false;
+      btnCheck.innerText = 'Sprawdź';
+    }
+  }
+}
+
+async function applyUpdateNow() {
+  if (!pendingUpdateInfo || !pendingUpdateInfo.download_url) {
+    showToast('Brak adresu pliku aktualizacji!', 'warning');
+    return;
+  }
+
+  const btnInstall = document.getElementById('btn-install-update');
+  const btnClose = document.getElementById('btn-close-update');
+  const alertBanner = document.getElementById('update-alert-banner');
+
+  if (btnInstall) {
+    btnInstall.disabled = true;
+    btnInstall.innerHTML = `
+      <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <circle cx="12" cy="12" r="10" stroke-width="4" class="opacity-25"></circle>
+        <path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path>
+      </svg>
+      <span>Pobieranie i restartowanie...</span>
+    `;
+  }
+  if (btnClose) btnClose.disabled = true;
+
+  if (alertBanner) {
+    alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-sky-50 border-sky-300 text-sky-900';
+    alertBanner.innerText = 'Pobieranie nowej wersji z serwera FTP/HTTP. Program zamknie się i zaktualizuje za chwilę...';
+  }
+
+  try {
+    const tauri = getTauri();
+    const res = await tauri.invoke('install_update', { downloadUrl: pendingUpdateInfo.download_url });
+    showToast(res, 'success');
+    setTimeout(() => {
+      // Zamknięcie aplikacji w celu umożliwienia podmiany pliku
+      window.close();
+    }, 1500);
+  } catch (err) {
+    console.error('Błąd instalacji aktualizacji:', err);
+    showToast(`Błąd instalacji: ${err}`, 'warning');
+    if (btnInstall) {
+      btnInstall.disabled = false;
+      btnInstall.innerText = 'Spróbuj ponownie';
+    }
+    if (btnClose) btnClose.disabled = false;
+  }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   checkActivationStatus();
+  initAppVersion();
+  // Sprawdź aktualizacje po 3 sekundach od startu jeśli jest zapisany URL
+  setTimeout(() => {
+    const savedUrl = localStorage.getItem('voip_update_url');
+    if (savedUrl) checkForUpdates(false);
+  }, 3000);
 });

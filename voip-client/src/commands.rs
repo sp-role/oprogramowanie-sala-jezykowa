@@ -47,3 +47,18 @@ pub fn activate_license(code: String, token: Option<String>) -> Result<String, S
     licensing::save_license(&hw_id, &code)?;
     Ok("Stanowisko zostało pomyślnie aktywowane!".to_string())
 }
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    crate::updater::get_current_version()
+}
+
+#[tauri::command]
+pub fn check_for_updates(update_url: String) -> Result<crate::updater::UpdateInfo, String> {
+    crate::updater::fetch_update_manifest(&update_url)
+}
+
+#[tauri::command]
+pub fn install_update(download_url: String) -> Result<String, String> {
+    crate::updater::download_and_install_update(&download_url)
+}
