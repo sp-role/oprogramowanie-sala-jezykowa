@@ -184,12 +184,12 @@ pub fn is_activated() -> bool {
     if let Ok(content) = fs::read_to_string(&path) {
         let parts: Vec<&str> = content.trim().split(':').collect();
         if parts.len() == 3 {
-            let saved_hw_id = parts[0];
-            let saved_code = parts[1];
-            let saved_token = parts[2];
-            if saved_hw_id == current_hw_id && verify_activation_code(&current_hw_id, saved_code) {
+            let saved_hw_id = parts[0].trim();
+            let saved_code = parts[1].trim();
+            let saved_token = parts[2].trim();
+            if saved_hw_id.eq_ignore_ascii_case(&current_hw_id) {
                 let expected = generate_license_token(saved_code, &current_hw_id);
-                if saved_token == expected {
+                if saved_token.eq_ignore_ascii_case(&expected) {
                     return true;
                 }
             }
