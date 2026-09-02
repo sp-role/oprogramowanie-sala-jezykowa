@@ -36,14 +36,8 @@ pub fn check_activation() -> bool {
 }
 
 #[tauri::command]
-pub fn activate_license(code: String, token: Option<String>) -> Result<String, String> {
+pub fn activate_license(code: String) -> Result<String, String> {
     let hw_id = licensing::get_hardware_id();
-    if let Some(tok) = token {
-        if !tok.trim().is_empty() {
-            licensing::save_license_token(&hw_id, &code, &tok)?;
-            return Ok("Stanowisko zostało pomyślnie aktywowane!".to_string());
-        }
-    }
     licensing::save_license(&hw_id, &code)?;
     Ok("Stanowisko zostało pomyślnie aktywowane!".to_string())
 }
@@ -61,4 +55,14 @@ pub fn check_for_updates(update_url: String) -> Result<crate::updater::UpdateInf
 #[tauri::command]
 pub fn install_update(download_url: String) -> Result<String, String> {
     crate::updater::download_and_install_update(&download_url)
+}
+
+#[tauri::command]
+pub fn window_minimize(window: tauri::Window) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+pub fn window_close(window: tauri::Window) {
+    let _ = window.close();
 }

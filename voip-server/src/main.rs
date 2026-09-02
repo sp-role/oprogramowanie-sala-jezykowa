@@ -31,7 +31,10 @@ pub fn run() {
             commands::activate_license,
             commands::get_app_version,
             commands::check_for_updates,
-            commands::install_update
+            commands::install_update,
+            commands::window_minimize,
+            commands::window_toggle_maximize,
+            commands::window_close
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

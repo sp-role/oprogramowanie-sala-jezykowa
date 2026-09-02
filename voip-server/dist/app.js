@@ -79,6 +79,21 @@ async function checkActivationStatus() {
   }
 }
 
+function windowMinimize() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) tauri.invoke('window_minimize');
+}
+
+function windowToggleMaximize() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) tauri.invoke('window_toggle_maximize');
+}
+
+function windowClose() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) tauri.invoke('window_close');
+}
+
 async function copyHardwareId() {
   if (!currentHardwareId) return;
   try {
@@ -102,7 +117,6 @@ async function submitActivation() {
   const input = document.getElementById('activation-code-input');
   const errorMsg = document.getElementById('activation-error-msg');
   const btn = document.getElementById('submit-act-btn');
-  const serverUrlInput = document.getElementById('license-server-url');
   const code = (input?.value || '').trim().toUpperCase();
 
   if (!code) {
@@ -113,9 +127,6 @@ async function submitActivation() {
     return;
   }
 
-  const serverUrl = (serverUrlInput?.value || '').trim() || localStorage.getItem('voip_license_server_url') || 'http://localhost/php-licensing-server/api.php';
-  localStorage.setItem('voip_license_server_url', serverUrl);
-
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
 
@@ -125,35 +136,7 @@ async function submitActivation() {
   }
 
   try {
-    let token = null;
-
-    // Próba weryfikacji online przez serwer PHP
-    try {
-      const response = await fetch(serverUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'activate',
-          code: code,
-          hardware_id: currentHardwareId,
-          computer_name: 'Panel Nauczyciela (Serwer)'
-        })
-      });
-
-      const data = await response.json();
-      if (response.ok && data.status === 'success') {
-        token = data.token;
-      } else if (data && data.message) {
-        throw new Error(data.message);
-      }
-    } catch (netErr) {
-      if (netErr.message && (netErr.message.includes('użyty') || netErr.message.includes('innym komputerze') || netErr.message.includes('Nieprawidłowy kod'))) {
-        throw netErr;
-      }
-      console.warn('Tryb offline/błąd połączenia z serwerem PHP:', netErr);
-    }
-
-    const res = await tauri.invoke('activate_license', { code, token });
+    const res = await tauri.invoke('activate_license', { code });
     if (errorMsg) errorMsg.classList.add('hidden');
     document.getElementById('activation-modal')?.classList.add('hidden');
     document.getElementById('start-modal')?.classList.remove('hidden');

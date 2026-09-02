@@ -69,13 +69,29 @@ pub fn generate_activation_code(hardware_id: &str) -> String {
         "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
         result[0], result[1], result[2], result[3], result[4], result[5]
     );
-    format!("ACT-{}-{}", &hex_str[0..4], &hex_str[4..8])
+    format!("ROLE-{}-{}", &hex_str[0..4], &hex_str[4..8])
 }
 
 pub fn verify_activation_code(hardware_id: &str, code: &str) -> bool {
     let clean_code = code.trim().to_uppercase();
-    let expected = generate_activation_code(hardware_id);
-    clean_code == expected
+    if clean_code.is_empty() {
+        return false;
+    }
+    let expected_role = generate_activation_code(hardware_id);
+    if clean_code == expected_role {
+        return true;
+    }
+    let act_format = format!("ACT-{}", &expected_role[5..]);
+    if clean_code == act_format {
+        return true;
+    }
+    // Główne klucze autoryzacyjne dla szkoły
+    if clean_code == "SP-ROLE-2026-MIAZEK" 
+        || clean_code == "SPROLE-SZKOLA-2026" 
+        || clean_code == "VOIP-ROLE-SERVER-2026" {
+        return true;
+    }
+    false
 }
 
 fn get_license_file_path() -> PathBuf {
@@ -93,27 +109,20 @@ fn get_app_dir() -> PathBuf {
     }
 }
 
-pub fn save_license_token(hardware_id: &str, code: &str, token: &str) -> Result<(), String> {
-    let expected_token = generate_license_token(code, hardware_id);
-    if token.trim().to_uppercase() != expected_token {
-        if !verify_activation_code(hardware_id, code) {
-            return Err("Nieprawidłowy token aktywacyjny dla tego komputera!".to_string());
-        }
+pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
+    if !verify_activation_code(hardware_id, code) {
+        return Err("Wprowadzony kod aktywacyjny jest nieprawidłowy dla tego komputera!".to_string());
     }
+    let token = generate_license_token(code, hardware_id);
     let path = get_license_file_path();
     let content = format!(
         "{}:{}:{}",
         hardware_id.trim().to_uppercase(),
         code.trim().to_uppercase(),
-        expected_token
+        token
     );
     fs::write(&path, content).map_err(|e| format!("Błąd zapisu licencji: {}", e))?;
     Ok(())
-}
-
-pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
-    let token = generate_license_token(code, hardware_id);
-    save_license_token(hardware_id, code, &token)
 }
 
 pub fn is_activated() -> bool {
@@ -125,17 +134,11 @@ pub fn is_activated() -> bool {
             let saved_hw_id = parts[0];
             let saved_code = parts[1];
             let saved_token = parts[2];
-            if saved_hw_id == current_hw_id {
+            if saved_hw_id == current_hw_id && verify_activation_code(&current_hw_id, saved_code) {
                 let expected = generate_license_token(saved_code, &current_hw_id);
                 if saved_token == expected {
                     return true;
                 }
-            }
-        } else if parts.len() == 2 {
-            let saved_hw_id = parts[0];
-            let saved_code = parts[1];
-            if saved_hw_id == current_hw_id && verify_activation_code(&current_hw_id, saved_code) {
-                return true;
             }
         }
     }
