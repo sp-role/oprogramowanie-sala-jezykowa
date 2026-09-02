@@ -72,6 +72,8 @@ pub fn generate_activation_code(hardware_id: &str) -> String {
     format!("ROLE-{}-{}", &hex_str[0..4], &hex_str[4..8])
 }
 
+pub const VERIFY_API_URL: &str = "https://www.szkola-role.pl/api/language-lab/verify";
+
 pub fn verify_activation_code(hardware_id: &str, code: &str) -> bool {
     let clean_code = code.trim().to_uppercase();
     if clean_code.is_empty() {
@@ -94,6 +96,59 @@ pub fn verify_activation_code(hardware_id: &str, code: &str) -> bool {
     false
 }
 
+pub fn verify_online_or_offline(hardware_id: &str, code: &str, app_type: &str) -> Result<bool, String> {
+    let clean_code = code.trim().to_uppercase();
+    if clean_code.is_empty() {
+        return Err("Wpisz kod aktywacyjny.".to_string());
+    }
+
+    let temp_dir = std::env::temp_dir().join("SPRoleVoIP_Updates");
+    let _ = fs::create_dir_all(&temp_dir);
+    let res_file = temp_dir.join("verify_client_response.json");
+    let _ = fs::remove_file(&res_file);
+
+    let post_data = format!(
+        r#"{{"code":"{}","hardware_id":"{}","app_type":"{}","school":"Szkoła Podstawowa w Rolach"}}"#,
+        clean_code, hardware_id, app_type
+    );
+
+    // Próba weryfikacji online na oficjalnym serwerze szkoły
+    let curl_res = std::process::Command::new("curl.exe")
+        .args([
+            "-X", "POST",
+            "-H", "Content-Type: application/json",
+            "-d", &post_data,
+            "-L", "-s",
+            "-o", res_file.to_str().unwrap(),
+            VERIFY_API_URL,
+        ])
+        .output();
+
+    if let Ok(o) = curl_res {
+        if o.status.success() && res_file.exists() {
+            if let Ok(body) = fs::read_to_string(&res_file) {
+                let lower = body.to_lowercase();
+                if lower.contains("\"status\":\"success\"") 
+                    || lower.contains("\"status\": \"success\"") 
+                    || lower.contains("\"valid\":true") 
+                    || lower.contains("\"valid\": true") 
+                    || lower.contains("\"active\":true") {
+                    return Ok(true);
+                } else if lower.contains("\"status\":\"error\"") || lower.contains("\"error\"") {
+                    return Err("Serwer szkoły (szkola-role.pl) odrzucił podany kod aktywacyjny!".to_string());
+                }
+            }
+        }
+    }
+
+    // Fallback: Weryfikacja algorytmiczna offline
+    if verify_activation_code(hardware_id, &clean_code) {
+        Ok(true)
+    } else {
+        Err("Wprowadzony kod aktywacyjny jest nieprawidłowy dla tego komputera!".to_string())
+    }
+}
+
 fn get_license_file_path() -> PathBuf {
     let base_dir = get_app_dir();
     base_dir.join("sp_role_voip_client.lic")
@@ -110,9 +165,7 @@ fn get_app_dir() -> PathBuf {
 }
 
 pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
-    if !verify_activation_code(hardware_id, code) {
-        return Err("Wprowadzony kod aktywacyjny jest nieprawidłowy dla tego komputera!".to_string());
-    }
+    verify_online_or_offline(hardware_id, code, "client")?;
     let token = generate_license_token(code, hardware_id);
     let path = get_license_file_path();
     let content = format!(
