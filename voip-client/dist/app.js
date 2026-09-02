@@ -138,6 +138,16 @@ async function checkActivationStatus() {
   }
 }
 
+function handleTitlebarDrag(e) {
+  if (e.target.closest('button')) return;
+  if (e.button === 0) {
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('window_start_dragging');
+    }
+  }
+}
+
 function windowMinimize() {
   const tauri = getTauri();
   if (tauri && tauri.invoke) tauri.invoke('window_minimize');

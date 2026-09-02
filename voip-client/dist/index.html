@@ -20,13 +20,13 @@
 <body class="bg-gradient-to-br from-slate-900 via-[#1e3a5f] to-slate-950 text-slate-800 font-sans m-0 h-screen flex flex-col select-none overflow-hidden">
 
   <!-- NIESTANDARDOWY PASEK TYTUŁOWY OKNA (CUSTOM WINDOW TITLEBAR) -->
-  <div data-tauri-drag-region class="h-8 bg-[#0f1d31] border-b border-white/10 flex items-center justify-between select-none px-3 z-50 flex-shrink-0 text-slate-300 w-full">
-    <div data-tauri-drag-region class="flex items-center gap-2 cursor-move select-none">
+  <div data-tauri-drag-region onmousedown="handleTitlebarDrag(event)" class="h-8 bg-[#0f1d31] border-b border-white/10 flex items-center justify-between select-none px-3 z-50 flex-shrink-0 text-slate-300 w-full cursor-move" style="-webkit-app-region: drag; user-select: none;">
+    <div data-tauri-drag-region class="flex items-center gap-2 select-none pointer-events-none">
       <div class="w-4 h-4 rounded bg-[#16a34a] flex items-center justify-center text-white text-[9px] font-black shadow-sm">🎓</div>
       <span class="text-xs font-semibold text-white tracking-wide">VoIP Stanowisko Ucznia</span>
       <span class="text-[10px] text-slate-400 font-medium">• SP w Rolach</span>
     </div>
-    <div class="flex items-center">
+    <div class="flex items-center" style="-webkit-app-region: no-drag;">
       <button onclick="windowMinimize()" class="w-8 h-8 hover:bg-white/10 active:bg-white/20 text-slate-300 hover:text-white flex items-center justify-center transition cursor-pointer" title="Minimalizuj">
         <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
       </button>

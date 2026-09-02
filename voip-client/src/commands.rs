@@ -58,6 +58,11 @@ pub fn install_update(download_url: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn window_start_dragging(window: tauri::Window) {
+    let _ = window.start_dragging();
+}
+
+#[tauri::command]
 pub fn window_minimize(window: tauri::Window) {
     let _ = window.minimize();
 }

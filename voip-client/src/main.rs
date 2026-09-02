@@ -28,6 +28,7 @@ pub fn run() {
             commands::get_app_version,
             commands::check_for_updates,
             commands::install_update,
+            commands::window_start_dragging,
             commands::window_minimize,
             commands::window_close
         ])
