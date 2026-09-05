@@ -33,6 +33,9 @@ pub struct ClientState {
     pub volume: f32,
     pub is_mic_test_active: bool,
     pub mic_test_until: f64,
+    pub mic_test_phase: String,
+    pub mic_test_countdown: f64,
+    pub mic_record_buffer: Vec<f32>,
     pub is_self_muted: bool,
     pub room_members: Vec<RoomMemberInfo>,
 }
@@ -56,6 +59,9 @@ impl Default for ClientState {
             volume: 1.0,
             is_mic_test_active: false,
             mic_test_until: 0.0,
+            mic_test_phase: "idle".to_string(),
+            mic_test_countdown: 0.0,
+            mic_record_buffer: Vec::new(),
             is_self_muted: false,
             room_members: Vec::new(),
         }
@@ -119,5 +125,7 @@ pub struct ClientStatusPayload {
     pub vad_threshold: f32,
     pub volume: f32,
     pub is_mic_test_active: bool,
+    pub mic_test_phase: String,
+    pub mic_test_countdown: f64,
     pub room_members: Vec<RoomMemberInfo>,
 }

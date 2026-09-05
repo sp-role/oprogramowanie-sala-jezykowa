@@ -1,5 +1,8 @@
+use std::collections::VecDeque;
 use std::net::UdpSocket;
+use std::time::Duration;
 use tauri::State;
+use crate::audio::SharedAudioStreams;
 use crate::licensing;
 use crate::state::{PORT_DISCOVERY, SharedClientState};
 
@@ -62,8 +65,7 @@ pub fn get_server_ip(state: State<'_, SharedClientState>) -> Option<String> {
 pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::ClientStatusPayload {
     let st = state.lock().unwrap();
     let is_conn = st.server_ip.is_some();
-    let now = crate::state::current_time();
-    let is_mic_testing = st.is_mic_test_active && now < st.mic_test_until;
+    let is_mic_testing = st.mic_test_phase != "idle";
     if !licensing::is_activated() {
         crate::state::ClientStatusPayload {
             connected: false,
@@ -76,6 +78,8 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             vad_threshold: st.vad_threshold,
             volume: st.volume,
             is_mic_test_active: is_mic_testing,
+            mic_test_phase: st.mic_test_phase.clone(),
+            mic_test_countdown: st.mic_test_countdown,
             room_members: vec![],
         }
     } else {
@@ -94,6 +98,8 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             vad_threshold: st.vad_threshold,
             volume: st.volume,
             is_mic_test_active: is_mic_testing,
+            mic_test_phase: st.mic_test_phase.clone(),
+            mic_test_countdown: st.mic_test_countdown,
             room_members: st.room_members.clone(),
         }
     }
@@ -223,18 +229,130 @@ pub fn set_client_volume(volume: f32, state: State<'_, SharedClientState>) {
 }
 
 #[tauri::command]
-pub fn start_mic_test(duration_secs: Option<f64>, state: State<'_, SharedClientState>) {
-    let dur = duration_secs.unwrap_or(5.0).clamp(1.0, 30.0);
-    let mut st = state.lock().unwrap();
-    st.is_mic_test_active = true;
-    st.mic_test_until = crate::state::current_time() + dur;
+pub fn start_mic_test(
+    duration_secs: Option<f64>,
+    state: State<'_, SharedClientState>,
+    audio_streams: State<'_, SharedAudioStreams>,
+) {
+    let dur = duration_secs.unwrap_or(5.0).clamp(2.0, 15.0);
+    {
+        let mut st = state.lock().unwrap();
+        st.is_mic_test_active = true;
+        st.mic_test_phase = "recording".to_string();
+        st.mic_test_until = crate::state::current_time() + dur;
+        st.mic_test_countdown = dur;
+        st.mic_record_buffer.clear();
+    }
+    {
+        let mut streams = audio_streams.lock().unwrap();
+        streams.remove("__mic_test__");
+    }
+
+    let state_clone = state.inner().clone();
+    let streams_clone = audio_streams.inner().clone();
+
+    // Wątek sterujący: 5s nagrywania głosu ucznia -> natychmiastowy czysty odsłuch w słuchawkach
+    std::thread::spawn(move || {
+        let start_time = crate::state::current_time();
+        let record_end = start_time + dur;
+
+        // Faza 1: Nagrywanie mowy (dokładnie `dur` sekund)
+        while crate::state::current_time() < record_end {
+            std::thread::sleep(Duration::from_millis(50));
+            let mut st = state_clone.lock().unwrap();
+            if st.mic_test_phase != "recording" {
+                // Test przerwany ręcznie przez użytkownika
+                return;
+            }
+            let remaining = (record_end - crate::state::current_time()).max(0.0);
+            st.mic_test_countdown = remaining;
+        }
+
+        // Pobranie zarejestrowanych próbek z bufora
+        let mut recorded = {
+            let mut st = state_clone.lock().unwrap();
+            if st.mic_test_phase != "recording" {
+                return;
+            }
+            std::mem::take(&mut st.mic_record_buffer)
+        };
+
+        if recorded.is_empty() {
+            let mut st = state_clone.lock().unwrap();
+            st.mic_test_phase = "idle".to_string();
+            st.is_mic_test_active = false;
+            st.mic_test_countdown = 0.0;
+            return;
+        }
+
+        // Wygładzenie początku i końca (fade-in / fade-out 10ms = 480 próbek),
+        // zapobiega to jakimkolwiek klikom na brzegach odtwarzanego bufora
+        let fade_len = 480.min(recorded.len() / 2);
+        for i in 0..fade_len {
+            let factor = i as f32 / fade_len as f32;
+            recorded[i] *= factor;
+            let end_idx = recorded.len() - 1 - i;
+            recorded[end_idx] *= factor;
+        }
+
+        let play_duration = recorded.len() as f64 / crate::state::SAMPLE_RATE as f64;
+
+        // Faza 2: Czysty odsłuch nagrania w słuchawkach
+        {
+            let mut streams = streams_clone.lock().unwrap();
+            streams.insert("__mic_test__".to_string(), VecDeque::from(recorded));
+        }
+
+        let play_start = crate::state::current_time();
+        let play_end = play_start + play_duration;
+
+        {
+            let mut st = state_clone.lock().unwrap();
+            st.mic_test_phase = "playing".to_string();
+            st.mic_test_countdown = play_duration;
+        }
+
+        while crate::state::current_time() < play_end {
+            std::thread::sleep(Duration::from_millis(50));
+            let mut st = state_clone.lock().unwrap();
+            if st.mic_test_phase != "playing" {
+                // Odsłuch przerwany ręcznie przez użytkownika
+                let mut streams = streams_clone.lock().unwrap();
+                streams.remove("__mic_test__");
+                return;
+            }
+            let remaining = (play_end - crate::state::current_time()).max(0.0);
+            st.mic_test_countdown = remaining;
+        }
+
+        // Zakończenie testu - powrót do stanu gotowości
+        {
+            let mut st = state_clone.lock().unwrap();
+            if st.mic_test_phase == "playing" {
+                st.mic_test_phase = "idle".to_string();
+                st.is_mic_test_active = false;
+                st.mic_test_countdown = 0.0;
+            }
+        }
+        {
+            let mut streams = streams_clone.lock().unwrap();
+            streams.remove("__mic_test__");
+        }
+    });
 }
 
 #[tauri::command]
-pub fn stop_mic_test(state: State<'_, SharedClientState>) {
+pub fn stop_mic_test(
+    state: State<'_, SharedClientState>,
+    audio_streams: State<'_, SharedAudioStreams>,
+) {
     let mut st = state.lock().unwrap();
     st.is_mic_test_active = false;
-    st.mic_test_until = 0.0;
+    st.mic_test_phase = "idle".to_string();
+    st.mic_test_countdown = 0.0;
+    st.mic_record_buffer.clear();
+    let mut streams = audio_streams.lock().unwrap();
+    streams.remove("__mic_test__");
 }
 
 

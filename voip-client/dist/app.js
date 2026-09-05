@@ -689,6 +689,37 @@ function applyClientStatus(data) {
   if (data.mic_level !== undefined) {
     updateSettingsMicMeter(data.mic_level);
   }
+
+  // Aktualizacja stanu przycisku testu mikrofonu (Nagrywanie 5s -> Czysty odsłuch 5s -> Gotowe)
+  const micTestBtn = document.getElementById('settings-test-mic-btn');
+  const micTestText = document.getElementById('settings-test-mic-text');
+  if (micTestBtn && micTestText && !micTestBtn.disabled) {
+    const phase = data.mic_test_phase || (data.is_mic_test_active ? 'recording' : 'idle');
+    const countdown = Math.ceil(data.mic_test_countdown || 0);
+
+    if (phase === 'recording') {
+      micTestBtn.className = 'mt-2.5 w-full bg-red-100 hover:bg-red-200 text-red-900 border-2 border-red-500 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md animate-pulse';
+      micTestText.innerText = `🔴 Mów do mikrofonu (${countdown > 0 ? countdown : 5}s)...`;
+    } else if (phase === 'playing') {
+      micTestBtn.className = 'mt-2.5 w-full bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border-2 border-emerald-500 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md';
+      micTestText.innerText = `🔊 Odsłuch w słuchawkach (${countdown > 0 ? countdown : 5}s)...`;
+    } else {
+      if (micTestBtn.dataset.prevPhase && micTestBtn.dataset.prevPhase !== 'idle') {
+        micTestBtn.className = 'mt-2.5 w-full bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+        micTestText.innerText = '✅ Test zakończony pomyślnie!';
+        setTimeout(() => {
+          if (!micTestBtn.dataset.prevPhase || micTestBtn.dataset.prevPhase === 'idle') {
+            micTestBtn.className = 'mt-2.5 w-full bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 active:scale-[0.98] font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+            micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
+          }
+        }, 2200);
+      } else if (!micTestBtn.dataset.prevPhase || micTestBtn.dataset.prevPhase === 'idle') {
+        micTestBtn.className = 'mt-2.5 w-full bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 active:scale-[0.98] font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+        micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
+      }
+    }
+    micTestBtn.dataset.prevPhase = phase;
+  }
 }
 
 async function initClientListener() {
@@ -839,7 +870,7 @@ async function loadAudioDevices() {
           micTestBtn.disabled = false;
           micTestBtn.classList.remove('opacity-50', 'cursor-not-allowed');
           if (!isTestingMicLoopback && micTestText) {
-            micTestText.innerText = 'Testuj mikrofon (Odsłuch w słuchawkach)';
+            micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
           }
         }
 
@@ -895,68 +926,28 @@ async function handleOutputDeviceChange(devName) {
   }
 }
 
-let isTestingMicLoopback = false;
-let micTestTimeout = null;
-
 async function testMicLoopback() {
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
 
   const btn = document.getElementById('settings-test-mic-btn');
-  const text = document.getElementById('settings-test-mic-text');
+  const currentPhase = btn?.dataset?.prevPhase || 'idle';
 
-  if (isTestingMicLoopback) {
-    isTestingMicLoopback = false;
-    if (micTestTimeout) clearTimeout(micTestTimeout);
+  if (currentPhase === 'recording' || currentPhase === 'playing') {
     try {
       await tauri.invoke('stop_mic_test');
-    } catch (e) {}
-    if (btn && text) {
-      btn.classList.replace('bg-emerald-100', 'bg-slate-50');
-      btn.classList.replace('text-emerald-900', 'text-slate-700');
-      btn.classList.replace('border-emerald-300', 'border-slate-300');
-      text.innerText = 'Testuj mikrofon (Odsłuch w słuchawkach)';
+    } catch (e) {
+      console.error('Błąd stop_mic_test:', e);
     }
     return;
-  }
-
-  isTestingMicLoopback = true;
-  if (btn && text) {
-    btn.classList.replace('bg-slate-50', 'bg-emerald-100');
-    btn.classList.replace('text-slate-700', 'text-emerald-900');
-    btn.classList.replace('border-slate-300', 'border-emerald-300');
-    text.innerText = '🎤 Mów do mikrofonu (Odsłuch aktywny 5s)...';
   }
 
   try {
     await tauri.invoke('start_mic_test', { durationSecs: 5.0 });
   } catch (err) {
-    console.error('Błąd startu testu mikrofonu:', err);
+    console.error('Błąd start_mic_test:', err);
+    showToast('Nie udało się uruchomić testu mikrofonu', 'error');
   }
-
-  let remaining = 5;
-  const interval = setInterval(() => {
-    remaining--;
-    if (remaining > 0 && isTestingMicLoopback && text) {
-      text.innerText = `🎤 Mów do mikrofonu (Odsłuch aktywny ${remaining}s)...`;
-    } else {
-      clearInterval(interval);
-    }
-  }, 1000);
-
-  micTestTimeout = setTimeout(async () => {
-    clearInterval(interval);
-    isTestingMicLoopback = false;
-    try {
-      await tauri.invoke('stop_mic_test');
-    } catch (e) {}
-    if (btn && text) {
-      btn.classList.replace('bg-emerald-100', 'bg-slate-50');
-      btn.classList.replace('text-emerald-900', 'text-slate-700');
-      btn.classList.replace('border-emerald-300', 'border-slate-300');
-      text.innerText = 'Testuj mikrofon (Odsłuch w słuchawkach)';
-    }
-  }, 5200);
 }
 
 async function testAudioOutput() {

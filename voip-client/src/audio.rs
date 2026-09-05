@@ -64,7 +64,7 @@ pub fn play_test_chime(streams: &SharedAudioStreams) {
     buf.extend(buffer);
 }
 
-pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_streams: SharedAudioStreams) {
+pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, _audio_streams: SharedAudioStreams) {
     // Dedykowany wątek keepalive/heartbeat działający niezależnie od dostępności czy stanu mikrofonu
     let hb_state = state.clone();
     let hb_socket = socket.try_clone().expect("Błąd klonowania gniazda heartbeat");
@@ -147,7 +147,6 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
             }
         };
 
-        let loopback_streams = audio_streams.clone();
         let stream_error = Arc::new(AtomicBool::new(false));
         let stream_error_cb = stream_error.clone();
 
@@ -160,7 +159,7 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
             let max_amp = mono_samples.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
             let now = current_time();
 
-            let (target_addr, packet, is_loopback, loopback_samples) = {
+            let (target_addr, packet) = {
                 let mut st = audio_state.lock().unwrap();
                 let vad_threshold = st.vad_threshold;
                 let is_speech = max_amp >= vad_threshold;
@@ -173,12 +172,10 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                 st.is_muted_by_teacher = is_teacher_talking;
                 st.is_speaking = speech_active && !is_teacher_talking;
 
-                let is_loopback = st.is_mic_test_active && now < st.mic_test_until;
-                if !is_loopback && st.is_mic_test_active {
-                    st.is_mic_test_active = false;
-                }
+                let is_recording = st.mic_test_phase == "recording";
+                let is_playing = st.mic_test_phase == "playing";
 
-                // Płynny wskaźnik mic_level z decay
+                // Płynny wskaźnik mic_level z decay (działa na żywo także w trakcie testu)
                 let instant_level = (max_amp * 4.0).min(1.0);
                 st.mic_level = if instant_level > st.mic_level {
                     instant_level
@@ -187,14 +184,42 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                 };
 
                 let is_self_muted = st.is_self_muted;
-                if is_self_muted {
+                if is_self_muted || is_recording || is_playing {
                     st.is_speaking = false;
                 }
 
-                if !(speech_active || is_loopback) || (is_teacher_talking && !is_loopback) || (is_self_muted && !is_loopback) || !crate::licensing::is_activated() {
-                    (None, None, is_loopback, Vec::new())
+                if is_playing {
+                    // Podczas odsłuchu nagrania w słuchawkach nie rejestrujemy ani nie wysyłamy głosu
+                    (None, None)
+                } else if is_recording {
+                    // Faza 1: Rejestrowanie czystego głosu do bufora testowego (resampling do 48000 Hz)
+                    let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
+                        let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
+                        let out_len = ((mono_samples.len() as f64) / ratio).round() as usize;
+                        let mut out = Vec::with_capacity(out_len);
+                        for i in 0..out_len {
+                            let pos = i as f64 * ratio;
+                            let idx0 = pos.floor() as usize;
+                            let idx1 = (idx0 + 1).min(mono_samples.len().saturating_sub(1));
+                            let frac = (pos - idx0 as f64) as f32;
+                            let s0 = mono_samples.get(idx0).copied().unwrap_or(0.0);
+                            let s1 = mono_samples.get(idx1).copied().unwrap_or(0.0);
+                            out.push(s0 * (1.0 - frac) + s1 * frac);
+                        }
+                        out
+                    } else {
+                        mono_samples.to_vec()
+                    };
+
+                    // Ograniczenie bufora do maksymalnie 6 sekund (288 000 próbek)
+                    if st.mic_record_buffer.len() < (SAMPLE_RATE as usize * 6) {
+                        st.mic_record_buffer.extend_from_slice(&samples_48k);
+                    }
+                    (None, None)
+                } else if !speech_active || is_teacher_talking || is_self_muted || !crate::licensing::is_activated() {
+                    (None, None)
                 } else {
-                    // Resampling do 48000 Hz jeśli urządzenie pracuje z inną częstotliwością
+                    // Normalne przesyłanie mowy ucznia na serwer
                     let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
                         let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
                         let out_len = ((mono_samples.len() as f64) / ratio).round() as usize;
@@ -214,7 +239,7 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     };
 
                     if st.server_ip.is_none() {
-                        (None, None, is_loopback, samples_48k)
+                        (None, None)
                     } else {
                         let server_ip = st.server_ip.as_ref().unwrap();
                         let target_addr = format!("{}:{}", server_ip, PORT_AUDIO);
@@ -238,21 +263,10 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                             let _ = pkt.write_i16::<BigEndian>((clamped * 32767.0) as i16);
                         }
 
-                        (Some(target_addr), Some(pkt), is_loopback, samples_48k)
+                        (Some(target_addr), Some(pkt))
                     }
                 }
             };
-
-            // Odsłuch testowy mikrofonu (Loopback) w słuchawkach
-            if is_loopback && !loopback_samples.is_empty() {
-                if let Ok(mut streams) = loopback_streams.try_lock() {
-                    let buf = streams.entry("__mic_test__".to_string()).or_default();
-                    if buf.len() > 4800 {
-                        buf.clear();
-                    }
-                    buf.extend(loopback_samples);
-                }
-            }
 
             // Wysłanie pakietu audio do serwera
             if let (Some(addr), Some(pkt)) = (target_addr, packet) {

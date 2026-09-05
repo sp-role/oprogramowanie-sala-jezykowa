@@ -248,7 +248,7 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
         }
 
         let is_conn = st.server_ip.is_some() && !is_timed_out;
-        let is_mic_testing = st.is_mic_test_active && now < st.mic_test_until;
+        let is_mic_testing = st.mic_test_phase != "idle";
         let payload = if !crate::licensing::is_activated() {
             ClientStatusPayload {
                 connected: false,
@@ -261,6 +261,8 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 vad_threshold: st.vad_threshold,
                 volume: st.volume,
                 is_mic_test_active: is_mic_testing,
+                mic_test_phase: st.mic_test_phase.clone(),
+                mic_test_countdown: st.mic_test_countdown,
                 room_members: vec![],
             }
         } else {
@@ -281,6 +283,8 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 vad_threshold: st.vad_threshold,
                 volume: st.volume,
                 is_mic_test_active: is_mic_testing,
+                mic_test_phase: st.mic_test_phase.clone(),
+                mic_test_countdown: st.mic_test_countdown,
                 room_members: st.room_members.clone(),
             }
         };
