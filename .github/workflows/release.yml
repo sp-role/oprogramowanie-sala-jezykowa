@@ -1,0 +1,57 @@
+name: Build & Release VoIP
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [voip-client, voip-server]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Install Frontend Dependencies & Build CSS
+        working-directory: ${{ matrix.app }}
+        run: |
+          npm ci
+          npm run build:css
+
+      - name: Build Tauri Application & Updater Artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        with:
+          projectPath: ${{ matrix.app }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'VoIP Pracownia ${{ github.ref_name }}'
+          releaseBody: 'Zobacz changelog dla wersji ${{ github.ref_name }}.'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
