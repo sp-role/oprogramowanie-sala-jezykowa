@@ -58,7 +58,9 @@ pub fn run() {
             commands::set_vad_threshold,
             commands::set_client_volume,
             commands::start_mic_test,
-            commands::stop_mic_test
+            commands::stop_mic_test,
+            commands::toggle_self_mute,
+            commands::leave_room
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

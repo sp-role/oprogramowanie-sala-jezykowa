@@ -216,6 +216,8 @@ pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServe
         return Err("Aplikacja serwera nie została aktywowana!".to_string());
     }
     let mut st = state.lock().unwrap();
+    let old_room = st.ip_to_group.get(&ip).cloned().unwrap_or_else(|| "Brak".to_string());
+
     for (_, members) in st.groups.iter_mut() {
         members.retain(|x| x != &ip);
     }
@@ -225,15 +227,49 @@ pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServe
     st.ip_to_group.insert(ip.clone(), room.clone());
     println!("[SERWER] Przypisano klienta {} do pokoju: '{}'", ip, room);
 
+    let now = crate::state::current_time();
+    let new_members = crate::network::get_room_members_payload(&st, &room, now);
+    let new_json = serde_json::to_string(&new_members).unwrap_or_default();
+    let msg_new = format!("VOIP_ROOM:{}|{}", room, new_json);
+
+    // Wyślij do przypisanego klienta
     if let Some(target_addr) = st.ip_to_addr.get(&ip).cloned() {
-        let msg = format!("VOIP_ROOM:{}", room);
         if let Some(ref sock) = st.audio_socket {
-            for _ in 0..5 {
-                let _ = sock.send_to(msg.as_bytes(), target_addr);
+            for _ in 0..3 {
+                let _ = sock.send_to(msg_new.as_bytes(), target_addr);
             }
-        } else if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            for _ in 0..5 {
-                let _ = socket.send_to(msg.as_bytes(), target_addr);
+        }
+    }
+
+    // Wyślij do pozostałych członków nowego pokoju
+    if room != "Brak" {
+        if let Some(ips) = st.groups.get(&room).cloned() {
+            for mem_ip in ips {
+                if mem_ip != ip {
+                    if let Some(target_addr) = st.ip_to_addr.get(&mem_ip).cloned() {
+                        if let Some(ref sock) = st.audio_socket {
+                            for _ in 0..2 {
+                                let _ = sock.send_to(msg_new.as_bytes(), target_addr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Powiadom stary pokój o odejściu klienta
+    if old_room != "Brak" && old_room != room {
+        let old_members = crate::network::get_room_members_payload(&st, &old_room, now);
+        let old_json = serde_json::to_string(&old_members).unwrap_or_default();
+        let msg_old = format!("VOIP_ROOM:{}|{}", old_room, old_json);
+        if let Some(ips) = st.groups.get(&old_room).cloned() {
+            for mem_ip in ips {
+                if let Some(target_addr) = st.ip_to_addr.get(&mem_ip).cloned() {
+                    if let Some(ref sock) = st.audio_socket {
+                        let _ = sock.send_to(msg_old.as_bytes(), target_addr);
+                    }
+                }
             }
         }
     }
@@ -251,7 +287,7 @@ pub fn reset_all_to_pool(state: State<'_, SharedServerState>) -> Result<(), Stri
     for ip in &ips {
         st.ip_to_group.insert(ip.clone(), "Brak".to_string());
         if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
-            let msg = b"VOIP_ROOM:Brak";
+            let msg = b"VOIP_ROOM:Brak|[]";
             if let Some(ref sock) = st.audio_socket {
                 for _ in 0..3 {
                     let _ = sock.send_to(msg, target_addr);
@@ -313,13 +349,19 @@ pub fn auto_pair_clients(mut rooms: Vec<String>, state: State<'_, SharedServerSt
 
         st.groups.entry(room_name.clone()).or_insert_with(Vec::new).push(ip.clone());
         st.ip_to_group.insert(ip.clone(), room_name.clone());
+    }
 
-        // Wyślij powiadomienie UDP do ucznia
-        if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
-            let msg = format!("VOIP_ROOM:{}", room_name);
-            if let Some(ref sock) = st.audio_socket {
-                for _ in 0..3 {
-                    let _ = sock.send_to(msg.as_bytes(), target_addr);
+    // Wyślij powiadomienia UDP do wszystkich uczniów wraz ze składem ich pokoju
+    for ip in &active_ips {
+        if let Some(room_name) = st.ip_to_group.get(ip).cloned() {
+            let members = crate::network::get_room_members_payload(&st, &room_name, now);
+            let members_json = serde_json::to_string(&members).unwrap_or_default();
+            let msg = format!("VOIP_ROOM:{}|{}", room_name, members_json);
+            if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
+                if let Some(ref sock) = st.audio_socket {
+                    for _ in 0..3 {
+                        let _ = sock.send_to(msg.as_bytes(), target_addr);
+                    }
                 }
             }
         }

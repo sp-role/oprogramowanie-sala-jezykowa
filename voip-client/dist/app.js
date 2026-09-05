@@ -282,25 +282,87 @@ function saveUsername() {
   }
 }
 
+let isHandRaised = false;
+
 function raiseHand() {
   const tauri = getTauri();
   if (tauri && tauri.invoke) tauri.invoke('raise_hand');
 
-  const btn = document.getElementById('raise-hand-btn');
-  if (!btn) return;
-  const originalContent = btn.innerHTML;
-  btn.innerHTML = `
-    <svg class="w-5 h-5 fill-current animate-bounce" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-    <span class="text-xs font-bold uppercase tracking-wide">Zgłoszono do nauczyciela!</span>
-  `;
-  btn.classList.replace('bg-[#1e3a5f]', 'bg-[#16a34a]');
-  btn.classList.replace('hover:bg-[#152843]', 'hover:bg-[#15803d]');
+  isHandRaised = true;
+  const skypeBtn = document.getElementById('skype-raise-hand-btn');
+  if (skypeBtn) {
+    skypeBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-bounce';
+    skypeBtn.title = 'Ręka podniesiona! Nauczyciel widzi Twoje zgłoszenie';
+  }
+  showToast('Poproszono nauczyciela o pomoc! ✋', 'info');
 
   setTimeout(() => {
-    btn.innerHTML = originalContent;
-    btn.classList.replace('bg-[#16a34a]', 'bg-[#1e3a5f]');
-    btn.classList.replace('hover:bg-[#15803d]', 'hover:bg-[#152843]');
-  }, 3500);
+    isHandRaised = false;
+    if (skypeBtn) {
+      skypeBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
+      skypeBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
+    }
+  }, 4000);
+}
+
+async function toggleSelfMute() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    const isMuted = await tauri.invoke('toggle_self_mute');
+    showToast(isMuted ? 'Mikrofon został wyciszony' : 'Mikrofon włączony', isMuted ? 'info' : 'success');
+    const st = await tauri.invoke('get_client_status');
+    if (st) applyClientStatus(st);
+  } catch (e) {
+    console.error('Błąd toggle_self_mute:', e);
+  }
+}
+
+async function handleHangupClick() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    await tauri.invoke('leave_room');
+    showToast('Rozłączono z pokojem. Przeniesiono do Poczekalni.', 'info');
+    const st = await tauri.invoke('get_client_status');
+    if (st) applyClientStatus(st);
+  } catch (e) {
+    console.error('Błąd leave_room:', e);
+  }
+}
+
+function handleClientVolumeChange(val) {
+  const num = parseInt(val, 10) || 100;
+  const skypeVol = document.getElementById('skype-volume-slider');
+  const skypePct = document.getElementById('skype-volume-pct');
+  if (skypeVol && document.activeElement !== skypeVol) skypeVol.value = num;
+  if (skypePct) skypePct.innerText = `${num}%`;
+
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('set_client_volume', { volume: num / 100.0 }).catch(console.error);
+  }
+}
+
+function handleVadThresholdChange(val) {
+  const num = parseInt(val, 10) || 25;
+  const vadPct = document.getElementById('settings-vad-pct');
+  if (vadPct) {
+    let label = 'Średnia (25)';
+    if (num <= 15) label = `Czuła (${num})`;
+    else if (num >= 45) label = `Mocna (${num})`;
+    else label = `Średnia (${num})`;
+    vadPct.innerText = label;
+  }
+  const slider = document.getElementById('settings-vad-slider');
+  if (slider && document.activeElement !== slider) {
+    slider.value = num;
+  }
+  localStorage.setItem('voip_vad_threshold', num);
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('set_vad_threshold', { threshold: num / 1000.0 }).catch(console.error);
+  }
 }
 
 function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false) {
@@ -386,70 +448,244 @@ function initStudentProfile() {
 
 let lastAssignedGroup = null;
 
+function parseUserAvatarAndName(rawName) {
+  if (!rawName) return { emoji: '🎓', name: 'Uczeń' };
+  const trimmed = rawName.trim();
+  const match = trimmed.match(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*(.*)$/u);
+  if (match) {
+    return {
+      emoji: match[1],
+      name: match[2].trim() || 'Uczeń',
+    };
+  }
+  return { emoji: '🎓', name: trimmed };
+}
+
+function renderParticipantCardHtml(card) {
+  return `
+    <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-3xl bg-slate-900/90 border-2 ${
+      card.is_speaking
+        ? 'border-emerald-400 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-500/25 bg-slate-900'
+        : 'border-slate-800/90 hover:border-slate-700'
+    } flex flex-col items-center justify-between p-3.5 shadow-2xl transition-all duration-150 overflow-hidden group select-none">
+      
+      <!-- Górne plakietki statusu -->
+      <div class="w-full flex items-center justify-between pointer-events-none z-10">
+        <div>
+          ${card.hand_raised ? `<div class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-bounce">✋ Pomoc</div>` : ''}
+        </div>
+        <div>
+          ${card.is_speaking ? `<div class="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-pulse"><span class="w-1.5 h-1.5 rounded-full bg-white"></span>Mówi</div>` : ''}
+        </div>
+      </div>
+
+      <!-- Awatar -->
+      <div class="relative flex items-center justify-center my-auto">
+        ${card.is_speaking ? `<div class="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60 pointer-events-none"></div>` : ''}
+        <div class="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-slate-800 border-2 ${card.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/20' : 'border-slate-700'} flex items-center justify-center text-3xl sm:text-4xl shadow-xl transition-transform duration-150 group-hover:scale-105">
+          ${card.emoji}
+        </div>
+      </div>
+
+      <!-- Pigułka z imieniem i ikoną mikrofonu -->
+      <div class="bg-black/70 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 max-w-[90%] shadow-md">
+        <span class="text-xs font-bold text-slate-100 truncate">${card.is_self ? `Ty (${card.name})` : card.name}</span>
+        ${card.is_muted
+          ? `<span class="text-xs text-red-400" title="Wyciszony">🔇</span>`
+          : card.is_speaking
+          ? `<span class="text-xs text-emerald-400 animate-pulse" title="Mówi">🔊</span>`
+          : `<span class="text-[11px] text-slate-400" title="Mikrofon aktywny">🎤</span>`}
+      </div>
+
+    </div>
+  `;
+}
+
+function renderSkypeGrid(data) {
+  const grid = document.getElementById('skype-grid');
+  if (!grid) return;
+
+  const rawSelfName = (localStorage.getItem('voip_username') || 'Uczeń').trim();
+  const selfAvatar = getAvatarEmoji(selectedAvatarId);
+  const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
+
+  // 1. Uczestnik "Ty"
+  const selfCard = {
+    name: rawSelfName,
+    emoji: selfAvatar,
+    is_speaking: data.is_speaking && !data.is_self_muted && !data.is_muted_by_teacher,
+    is_muted: data.is_self_muted || data.is_muted_by_teacher,
+    is_self: true,
+    hand_raised: isHandRaised,
+  };
+
+  // 2. Inni uczestnicy z pokoju
+  const otherMembers = (data.room_members || [])
+    .filter((m) => !m.is_self)
+    .map((m) => {
+      const parsed = parseUserAvatarAndName(m.name);
+      return {
+        name: parsed.name,
+        emoji: parsed.emoji,
+        is_speaking: m.is_speaking,
+        is_muted: data.is_muted_by_teacher,
+        is_self: false,
+        hand_raised: m.hand_raised,
+      };
+    });
+
+  // Jeżeli jesteśmy w Poczekalni
+  if (!isRoom) {
+    grid.className = 'w-full h-full flex flex-col items-center justify-center max-w-sm mx-auto text-center';
+    grid.innerHTML = `
+      <div class="relative w-full aspect-[4/3] max-h-[250px] rounded-3xl bg-slate-900/90 border-2 ${
+        selfCard.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-500/20' : 'border-slate-800'
+      } flex flex-col items-center justify-between p-4 shadow-2xl transition-all duration-200 overflow-hidden group">
+        
+        <div class="w-full flex items-center justify-between pointer-events-none z-10">
+          <div>
+            ${selfCard.hand_raised ? `<div class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-bounce">✋ Prosisz o pomoc</div>` : ''}
+          </div>
+          <div>
+            ${selfCard.is_speaking ? `<div class="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-pulse"><span class="w-1.5 h-1.5 rounded-full bg-white"></span>Mówisz</div>` : ''}
+          </div>
+        </div>
+
+        <div class="relative flex items-center justify-center my-auto">
+          ${selfCard.is_speaking ? `<div class="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60"></div>` : ''}
+          <div class="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-slate-800 border-2 ${selfCard.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/20' : 'border-slate-700'} flex items-center justify-center text-4xl sm:text-5xl shadow-xl transition-transform duration-150 group-hover:scale-105">
+            ${selfCard.emoji}
+          </div>
+        </div>
+
+        <div class="bg-black/70 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 max-w-[90%] shadow-md">
+          <span class="text-xs font-bold text-white truncate">Ty (${selfCard.name})</span>
+          ${selfCard.is_muted
+            ? `<span class="text-xs text-red-400" title="Wyciszony">🔇</span>`
+            : selfCard.is_speaking
+            ? `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>`
+            : `<span class="text-[11px] text-slate-400">🎤</span>`}
+        </div>
+      </div>
+
+      <div class="mt-3 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 text-slate-400 text-xs">
+        <span class="text-amber-400 font-bold block mb-0.5">🟡 Poczekalnia lekcyjna</span>
+        <span>Czekasz na przydział do pokoju. Gdy nauczyciel dołączy Cię do pary lub grupy, natychmiast połączysz się z drugą osobą.</span>
+      </div>
+    `;
+    return;
+  }
+
+  // Jesteśmy w pokoju roboczym (np. Pokój 1)
+  const allCards = [selfCard, ...otherMembers];
+
+  if (allCards.length === 1) {
+    grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
+    grid.innerHTML = `
+      ${renderParticipantCardHtml(selfCard)}
+      <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-3xl border-2 border-dashed border-slate-700/80 bg-slate-900/40 flex flex-col items-center justify-center p-4 text-center text-slate-400">
+        <div class="w-14 h-14 rounded-full bg-slate-800/60 border border-slate-700/60 flex items-center justify-center text-2xl mb-2 text-slate-500 animate-pulse">
+          ⏳
+        </div>
+        <span class="text-xs font-bold text-slate-300 mb-0.5">Oczekiwanie na partnera</span>
+        <span class="text-[11px] text-slate-500 leading-snug">Gdy nauczyciel dołączy drugą osobę, jej kafelek pojawi się tutaj.</span>
+      </div>
+    `;
+  } else if (allCards.length === 2) {
+    grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
+    grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+  } else if (allCards.length <= 4) {
+    grid.className = 'w-full h-full grid grid-cols-2 gap-3 items-center justify-center max-w-xl mx-auto';
+    grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+  } else {
+    grid.className = 'w-full h-full grid grid-cols-2 sm:grid-cols-3 gap-2.5 items-center justify-center max-w-2xl mx-auto';
+    grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+  }
+}
+
 function applyClientStatus(data) {
   if (!data) return;
-  const ipElem = document.getElementById('server-ip');
-  if (ipElem) ipElem.innerText = data.server_ip;
-  const groupElem = document.getElementById('group-name');
-  if (groupElem && data.group) {
-    const isRoom = data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
-    groupElem.innerText = isRoom ? data.group : 'Poczekalnia';
 
-    const roomCard = document.getElementById('room-card');
-    const roomBadge = document.getElementById('room-badge');
-    if (roomBadge) {
-      if (isRoom) {
-        roomBadge.innerText = 'Aktywny pokój';
-        roomBadge.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300';
-      } else {
-        roomBadge.innerText = 'Poczekalnia';
-        roomBadge.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500';
-      }
-    }
-    if (roomCard) {
-      if (isRoom) {
-        roomCard.className = 'bg-emerald-50/40 border border-emerald-300 rounded-2xl p-3.5 shadow-sm flex flex-col justify-between transition-all';
-      } else {
-        roomCard.className = 'bg-white border border-slate-200/90 rounded-2xl p-3.5 shadow-sm flex flex-col justify-between transition-all';
-      }
-    }
+  const roomTitle = document.getElementById('skype-room-title');
+  const countBadge = document.getElementById('skype-participant-count');
+  const statusDot = document.getElementById('skype-room-status-dot');
 
-    if (lastAssignedGroup !== null && lastAssignedGroup !== data.group) {
-      if (isRoom) {
-        showToast(`Przydzielono Cię do: ${data.group}`, 'success');
-        roomCard?.classList.add('ring-2', 'ring-emerald-400');
-        setTimeout(() => roomCard?.classList.remove('ring-2', 'ring-emerald-400'), 3500);
-      } else {
-        showToast('Przeniesiono Cię do Poczekalni', 'info');
-      }
+  const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
+  const groupDisplay = isRoom ? data.group : 'Poczekalnia';
+
+  if (roomTitle) roomTitle.innerText = groupDisplay;
+
+  if (statusDot) {
+    if (data.connected) {
+      statusDot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+    } else {
+      statusDot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
     }
-    lastAssignedGroup = data.group;
   }
 
-  const badge = document.getElementById('status-badge');
-  const statusDot = document.getElementById('status-dot');
-
-  if (data.connected) {
-    if (badge) {
-      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span>Połączono</span>';
-      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
-    }
-    if (statusDot) statusDot.className = 'absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm';
-  } else {
-    const msg = data.server_ip.includes('Wpisz')
-      ? 'Brak imienia'
-      : data.server_ip.includes('brak odp')
-      ? 'Brak odp.'
-      : 'Szukanie...';
-    if (badge) {
-      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span><span>${msg}</span>`;
-      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200';
-    }
-    if (statusDot) statusDot.className = 'absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-amber-500 rounded-full border-2 border-white shadow-sm';
+  // Liczba uczestników
+  const membersCount = isRoom ? Math.max(1, (data.room_members || []).length) : 1;
+  if (countBadge) {
+    countBadge.innerText = membersCount === 1 ? '1 uczestnik' : `${membersCount} uczestników`;
   }
 
-  updateMicState(data.is_speaking, data.is_muted_by_teacher, data.is_mic_test_active);
+  // Podgląd własnego profilu na pasku
+  const selfAvatarPreview = document.getElementById('skype-self-avatar-preview');
+  const selfNamePreview = document.getElementById('skype-self-name-preview');
+  if (selfAvatarPreview) selfAvatarPreview.innerText = getAvatarEmoji(selectedAvatarId);
+  if (selfNamePreview) selfNamePreview.innerText = (localStorage.getItem('voip_username') || 'Uczeń').trim();
 
+  // Baner ogłoszenia nauczyciela
+  const broadcastBanner = document.getElementById('skype-broadcast-banner');
+  if (broadcastBanner) {
+    if (data.is_muted_by_teacher) {
+      broadcastBanner.classList.remove('hidden');
+    } else {
+      broadcastBanner.classList.add('hidden');
+    }
+  }
+
+  // Przycisk wyciszenia mikrofonu
+  const muteBtn = document.getElementById('skype-mute-btn');
+  const iconUnmuted = document.getElementById('skype-mute-icon-unmuted');
+  const iconMuted = document.getElementById('skype-mute-icon-muted');
+  if (muteBtn && iconUnmuted && iconMuted) {
+    if (data.is_self_muted) {
+      muteBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-red-600 hover:bg-red-700 ring-4 ring-red-500/30 text-white flex items-center justify-center transition shadow-lg shadow-red-600/25 cursor-pointer';
+      iconUnmuted.classList.add('hidden');
+      iconMuted.classList.remove('hidden');
+      muteBtn.title = 'Mikrofon wyciszony (kliknij, aby włączyć)';
+    } else {
+      muteBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition shadow-md cursor-pointer';
+      iconUnmuted.classList.remove('hidden');
+      iconMuted.classList.add('hidden');
+      muteBtn.title = 'Wycisz mikrofon';
+    }
+  }
+
+  // Suwak głośności w doku
+  const volSlider = document.getElementById('skype-volume-slider');
+  const volPct = document.getElementById('skype-volume-pct');
+  const pctValue = Math.round((data.volume || 1.0) * 100);
+  if (volSlider && document.activeElement !== volSlider) {
+    volSlider.value = pctValue;
+  }
+  if (volPct) volPct.innerText = `${pctValue}%`;
+
+  // Powiadomienie toast o zmianie pokoju
+  if (lastAssignedGroup !== null && lastAssignedGroup !== data.group) {
+    if (isRoom) {
+      showToast(`Przydzielono Cię do: ${data.group}`, 'success');
+    } else {
+      showToast('Przeniesiono Cię do Poczekalni', 'info');
+    }
+  }
+  lastAssignedGroup = data.group;
+
+  // Renderowanie kafelków Skype
+  renderSkypeGrid(data);
+
+  // Aktualizacja wskaźnika mikrofonu w ustawieniach
   if (data.mic_level !== undefined) {
     updateSettingsMicMeter(data.mic_level);
   }

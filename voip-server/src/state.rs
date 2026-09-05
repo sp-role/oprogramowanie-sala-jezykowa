@@ -60,6 +60,14 @@ pub struct ClientDisplayInfo {
     pub quality: String, // "excellent", "good", "fair", "poor"
 }
 
+#[derive(Clone, Serialize, serde::Deserialize, Debug)]
+pub struct RoomMemberPayload {
+    pub ip: String,
+    pub name: String,
+    pub is_speaking: bool,
+    pub hand_raised: bool,
+}
+
 #[derive(Clone, Serialize, Default, Debug)]
 pub struct MediaPlaybackStatus {
     pub is_loaded: bool,

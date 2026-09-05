@@ -71,10 +71,12 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             group: "Zablokowany".to_string(),
             is_speaking: false,
             is_muted_by_teacher: false,
+            is_self_muted: st.is_self_muted,
             mic_level: st.mic_level,
             vad_threshold: st.vad_threshold,
             volume: st.volume,
             is_mic_test_active: is_mic_testing,
+            room_members: vec![],
         }
     } else {
         crate::state::ClientStatusPayload {
@@ -87,12 +89,36 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             group: st.group.clone().unwrap_or_else(|| "Poczekalnia".to_string()),
             is_speaking: st.is_speaking,
             is_muted_by_teacher: st.is_muted_by_teacher,
+            is_self_muted: st.is_self_muted,
             mic_level: st.mic_level,
             vad_threshold: st.vad_threshold,
             volume: st.volume,
             is_mic_test_active: is_mic_testing,
+            room_members: st.room_members.clone(),
         }
     }
+}
+
+#[tauri::command]
+pub fn toggle_self_mute(state: State<'_, SharedClientState>) -> bool {
+    let mut st = state.lock().unwrap();
+    st.is_self_muted = !st.is_self_muted;
+    st.is_self_muted
+}
+
+#[tauri::command]
+pub fn leave_room(state: State<'_, SharedClientState>) -> Result<(), String> {
+    let mut st = state.lock().unwrap();
+    st.group = Some("Poczekalnia".to_string());
+    st.room_members.clear();
+
+    if let Some(ref server_ip) = st.server_ip {
+        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            let target = format!("{}:{}", server_ip, crate::state::PORT_AUDIO);
+            let _ = socket.send_to(b"VOIP_LEAVE", &target);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

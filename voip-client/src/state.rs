@@ -33,6 +33,8 @@ pub struct ClientState {
     pub volume: f32,
     pub is_mic_test_active: bool,
     pub mic_test_until: f64,
+    pub is_self_muted: bool,
+    pub room_members: Vec<RoomMemberInfo>,
 }
 
 impl Default for ClientState {
@@ -54,6 +56,8 @@ impl Default for ClientState {
             volume: 1.0,
             is_mic_test_active: false,
             mic_test_until: 0.0,
+            is_self_muted: false,
+            room_members: Vec::new(),
         }
     }
 }
@@ -87,6 +91,14 @@ impl ClientState {
 
 pub type SharedClientState = Arc<Mutex<ClientState>>;
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct RoomMemberInfo {
+    pub name: String,
+    pub is_speaking: bool,
+    pub is_self: bool,
+    pub hand_raised: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AudioDevicesInfo {
     pub input_devices: Vec<String>,
@@ -102,8 +114,10 @@ pub struct ClientStatusPayload {
     pub group: String,
     pub is_speaking: bool,
     pub is_muted_by_teacher: bool,
+    pub is_self_muted: bool,
     pub mic_level: f32,
     pub vad_threshold: f32,
     pub volume: f32,
     pub is_mic_test_active: bool,
+    pub room_members: Vec<RoomMemberInfo>,
 }

@@ -256,10 +256,12 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 group: "Zablokowany".to_string(),
                 is_speaking: false,
                 is_muted_by_teacher: false,
+                is_self_muted: st.is_self_muted,
                 mic_level: st.mic_level,
                 vad_threshold: st.vad_threshold,
                 volume: st.volume,
                 is_mic_test_active: is_mic_testing,
+                room_members: vec![],
             }
         } else {
             ClientStatusPayload {
@@ -274,10 +276,12 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 group: st.group.clone().unwrap_or_else(|| "Poczekalnia".to_string()),
                 is_speaking: st.is_speaking,
                 is_muted_by_teacher: st.is_muted_by_teacher,
+                is_self_muted: st.is_self_muted,
                 mic_level: st.mic_level,
                 vad_threshold: st.vad_threshold,
                 volume: st.volume,
                 is_mic_test_active: is_mic_testing,
+                room_members: st.room_members.clone(),
             }
         };
         drop(st);

@@ -186,7 +186,12 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     st.mic_level * 0.86
                 };
 
-                if !(speech_active || is_loopback) || (is_teacher_talking && !is_loopback) || !crate::licensing::is_activated() {
+                let is_self_muted = st.is_self_muted;
+                if is_self_muted {
+                    st.is_speaking = false;
+                }
+
+                if !(speech_active || is_loopback) || (is_teacher_talking && !is_loopback) || (is_self_muted && !is_loopback) || !crate::licensing::is_activated() {
                     (None, None, is_loopback, Vec::new())
                 } else {
                     // Resampling do 48000 Hz jeśli urządzenie pracuje z inną częstotliwością
@@ -422,30 +427,50 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
         if let Ok((size, addr)) = socket.recv_from(&mut recv_buf) {
                 let now = current_time();
 
-                // Dynamiczna synchronizacja pokoju roboczego
-                if size >= 10 && &recv_buf[..10] == b"VOIP_ROOM:" {
-                    if let Ok(room_name) = std::str::from_utf8(&recv_buf[10..size]) {
-                        let mut st = state.lock().unwrap();
-                        st.last_server_packet = now;
-                        st.group = Some(if room_name == "Brak" {
-                            "Poczekalnia".to_string()
-                        } else {
-                            room_name.to_string()
-                        });
-                    }
-                    continue;
-                }
+                // Dynamiczna synchronizacja pokoju roboczego oraz składu uczestników
+                if size >= 10 && (&recv_buf[..10] == b"VOIP_ROOM:" || &recv_buf[..10] == b"VOIP_PONG:") {
+                    if let Ok(text) = std::str::from_utf8(&recv_buf[10..size]) {
+                        let (room_name, members_json) = match text.split_once('|') {
+                            Some((r, m)) => (r.trim(), Some(m.trim())),
+                            None => (text.trim(), None),
+                        };
 
-                // Odpowiedź ping/keep-alive od serwera (VOIP_PONG)
-                if size >= 10 && &recv_buf[..10] == b"VOIP_PONG:" {
-                    if let Ok(room_name) = std::str::from_utf8(&recv_buf[10..size]) {
                         let mut st = state.lock().unwrap();
                         st.last_server_packet = now;
-                        st.group = Some(if room_name == "Brak" {
-                            "Poczekalnia".to_string()
-                        } else {
+                        let is_room = room_name != "Brak";
+                        st.group = Some(if is_room {
                             room_name.to_string()
+                        } else {
+                            "Poczekalnia".to_string()
                         });
+
+                        if let Some(m_json) = members_json {
+                            #[derive(serde::Deserialize)]
+                            struct ServerMember {
+                                #[allow(dead_code)]
+                                ip: String,
+                                name: String,
+                                is_speaking: bool,
+                                hand_raised: bool,
+                            }
+                            if let Ok(server_members) = serde_json::from_str::<Vec<ServerMember>>(m_json) {
+                                let my_name = st.username.trim().to_string();
+                                let mut members = Vec::new();
+                                for sm in server_members {
+                                    let clean_sm_name = sm.name.trim().to_string();
+                                    let is_me = !my_name.is_empty() && (clean_sm_name == my_name || my_name.contains(&clean_sm_name));
+                                    members.push(crate::state::RoomMemberInfo {
+                                        name: clean_sm_name,
+                                        is_speaking: sm.is_speaking,
+                                        is_self: is_me,
+                                        hand_raised: sm.hand_raised,
+                                    });
+                                }
+                                st.room_members = members;
+                            }
+                        } else if !is_room {
+                            st.room_members.clear();
+                        }
                     }
                     continue;
                 }
@@ -469,6 +494,27 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     }
 
                     if size > audio_offset {
+                        let sender_name = std::str::from_utf8(&recv_buf[13..audio_offset]).unwrap_or("").trim();
+                        if !sender_name.is_empty() && !sender_name.starts_with("Nauczyciel") && !sender_name.starts_with("Lektor") {
+                            let mut st = state.lock().unwrap();
+                            let mut found = false;
+                            for m in st.room_members.iter_mut() {
+                                if m.name == sender_name || m.name.contains(sender_name) {
+                                    m.is_speaking = true;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                st.room_members.push(crate::state::RoomMemberInfo {
+                                    name: sender_name.to_string(),
+                                    is_speaking: true,
+                                    is_self: false,
+                                    hand_raised: false,
+                                });
+                            }
+                        }
+
                         let sender_key = addr.to_string();
                         let mut cursor = Cursor::new(&recv_buf[audio_offset..size]);
                         let mut decoded_samples = Vec::new();

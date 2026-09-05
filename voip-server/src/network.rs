@@ -268,6 +268,31 @@ pub fn run_mdns_server() {
     }
 }
 
+pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now: f64) -> Vec<crate::state::RoomMemberPayload> {
+    if room == "Brak" || room.is_empty() {
+        return vec![];
+    }
+    if let Some(members) = st.groups.get(room) {
+        members
+            .iter()
+            .map(|ip| {
+                let name = st.ip_to_name.get(ip).cloned().unwrap_or_else(|| format!("Uczeń ({})", ip));
+                let stat = st.client_stats.get(ip);
+                let is_speaking = stat.map(|s| (now - s.last_spoken) < 0.6).unwrap_or(false);
+                let hand_raised = stat.map(|s| s.hand_raised).unwrap_or(false);
+                crate::state::RoomMemberPayload {
+                    ip: ip.clone(),
+                    name,
+                    is_speaking,
+                    hand_raised,
+                }
+            })
+            .collect()
+    } else {
+        vec![]
+    }
+}
+
 pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAudioBuffer) {
     let socket = match UdpSocket::bind(("0.0.0.0", PORT_AUDIO)) {
         Ok(s) => {
@@ -297,6 +322,29 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
             let sender_ip = addr.ip().to_string();
             let recv_time = current_time();
             let data = &buf[..size];
+
+            // Obsługa żądania opuszczenia pokoju przez ucznia (Rozłącz)
+            if size >= 10 && &data[..10] == b"VOIP_LEAVE" {
+                let mut st = state.lock().unwrap();
+                let old_room = st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string()).unwrap_or_else(|| "Brak".to_string());
+                if old_room != "Brak" {
+                    if let Some(members) = st.groups.get_mut(&old_room) {
+                        members.retain(|x| x != &sender_ip);
+                    }
+                    let rem_members = get_room_members_payload(&st, &old_room, recv_time);
+                    let rem_json = serde_json::to_string(&rem_members).unwrap_or_default();
+                    let rem_msg = format!("VOIP_ROOM:{}|{}", old_room, rem_json);
+                    if let Some(ips) = st.groups.get(&old_room) {
+                        for mem_ip in ips {
+                            if let Some(target) = st.ip_to_addr.get(mem_ip) {
+                                let _ = socket.send_to(rem_msg.as_bytes(), target);
+                            }
+                        }
+                    }
+                }
+                let _ = socket.send_to(b"VOIP_ROOM:Brak|[]", addr);
+                continue;
+            }
 
             if size >= 13 {
                 let mut cursor = Cursor::new(&data[0..12]);
@@ -333,10 +381,12 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
                 if is_new {
                     println!("[SERWER-AUDIO] Nowy uczeń zarejestrowany: {} ({})", display_name, sender_ip);
                     st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string());
-                    let _ = socket.send_to(b"VOIP_ROOM:Brak", addr);
+                    let _ = socket.send_to(b"VOIP_ROOM:Brak|[]", addr);
                 } else if !has_audio {
                     let cur_room = st.ip_to_group.get(&sender_ip).cloned().unwrap_or_else(|| "Brak".to_string());
-                    let pong = format!("VOIP_PONG:{}", cur_room);
+                    let members = get_room_members_payload(&st, &cur_room, recv_time);
+                    let members_json = serde_json::to_string(&members).unwrap_or_default();
+                    let pong = format!("VOIP_PONG:{}|{}", cur_room, members_json);
                     let _ = socket.send_to(pong.as_bytes(), addr);
                 }
 
