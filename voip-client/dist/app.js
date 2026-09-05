@@ -506,6 +506,8 @@ function updateSettingsMicMeter(level) {
   if (pctLabel) pctLabel.innerText = `${pct}%`;
 }
 
+let audioDevicePollInterval = null;
+
 async function openSettingsModal() {
   document.getElementById('settings-modal')?.classList.remove('hidden');
   await loadAudioDevices();
@@ -514,10 +516,16 @@ async function openSettingsModal() {
   if (savedVad !== null) {
     handleVadThresholdChange(savedVad);
   }
+  if (audioDevicePollInterval) clearInterval(audioDevicePollInterval);
+  audioDevicePollInterval = setInterval(loadAudioDevices, 1500);
 }
 
 function closeSettingsModal() {
   document.getElementById('settings-modal')?.classList.add('hidden');
+  if (audioDevicePollInterval) {
+    clearInterval(audioDevicePollInterval);
+    audioDevicePollInterval = null;
+  }
   if (isTestingMicLoopback) {
     testMicLoopback();
   }
@@ -570,26 +578,65 @@ async function loadAudioDevices() {
     const devices = await tauri.invoke('get_audio_devices');
     const inputSelect = document.getElementById('settings-input-select');
     const outputSelect = document.getElementById('settings-output-select');
+    const micWarning = document.getElementById('settings-no-mic-warning');
+    const micTestBtn = document.getElementById('settings-test-mic-btn');
+    const micTestText = document.getElementById('settings-test-mic-text');
 
     const savedInput = localStorage.getItem('voip_input_device') || devices.selected_input || 'default';
     const savedOutput = localStorage.getItem('voip_output_device') || devices.selected_output || 'default';
 
     if (inputSelect) {
-      let html = '<option value="default">Domyślny mikrofon systemowy</option>';
-      devices.input_devices.forEach((dev) => {
-        html += `<option value="${dev}">${dev}</option>`;
-      });
-      inputSelect.innerHTML = html;
-      inputSelect.value = savedInput;
+      if (!devices.input_devices || devices.input_devices.length === 0) {
+        inputSelect.innerHTML = '<option value="" disabled selected>⚠️ Brak podłączonego mikrofonu</option>';
+        inputSelect.dataset.renderedDevices = 'empty';
+        if (micWarning) micWarning.classList.remove('hidden');
+        if (micTestBtn) {
+          micTestBtn.disabled = true;
+          micTestBtn.classList.add('opacity-50', 'cursor-not-allowed');
+          if (!isTestingMicLoopback && micTestText) {
+            micTestText.innerText = 'Podłącz mikrofon, aby przetestować';
+          }
+        }
+      } else {
+        if (micWarning) micWarning.classList.add('hidden');
+        if (micTestBtn) {
+          micTestBtn.disabled = false;
+          micTestBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+          if (!isTestingMicLoopback && micTestText) {
+            micTestText.innerText = 'Testuj mikrofon (Odsłuch w słuchawkach)';
+          }
+        }
+
+        const serialized = JSON.stringify(devices.input_devices);
+        if (inputSelect.dataset.renderedDevices !== serialized) {
+          let html = '<option value="default">Domyślny mikrofon systemowy</option>';
+          devices.input_devices.forEach((dev) => {
+            html += `<option value="${dev}">${dev}</option>`;
+          });
+          inputSelect.innerHTML = html;
+          inputSelect.dataset.renderedDevices = serialized;
+          if (devices.input_devices.includes(savedInput) || savedInput === 'default') {
+            inputSelect.value = savedInput;
+          } else if (devices.input_devices.length > 0) {
+            inputSelect.value = devices.input_devices[0];
+          }
+        }
+      }
     }
 
     if (outputSelect) {
-      let html = '<option value="default">Domyślne słuchawki systemowe</option>';
-      devices.output_devices.forEach((dev) => {
-        html += `<option value="${dev}">${dev}</option>`;
-      });
-      outputSelect.innerHTML = html;
-      outputSelect.value = savedOutput;
+      const serializedOut = JSON.stringify(devices.output_devices || []);
+      if (outputSelect.dataset.renderedDevices !== serializedOut) {
+        let html = '<option value="default">Domyślne słuchawki systemowe</option>';
+        if (devices.output_devices) {
+          devices.output_devices.forEach((dev) => {
+            html += `<option value="${dev}">${dev}</option>`;
+          });
+        }
+        outputSelect.innerHTML = html;
+        outputSelect.dataset.renderedDevices = serializedOut;
+        outputSelect.value = savedOutput;
+      }
     }
   } catch (err) {
     console.error('Błąd pobierania urządzeń audio:', err);

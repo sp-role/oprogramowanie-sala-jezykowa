@@ -2,6 +2,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::collections::{HashMap, VecDeque};
 use std::net::UdpSocket;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use crate::state::{current_time, MediaPlaybackStatus, SAMPLE_RATE, SharedMediaPlayer, SharedServerState};
@@ -197,23 +198,51 @@ pub fn run_media_player_streamer(
 }
 
 pub fn capture_and_broadcast(state: SharedServerState) {
-    let host = cpal::default_host();
-    let device = match host.default_input_device() {
-        Some(d) => d,
-        None => return,
-    };
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Default,
-    };
-    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
-    let mut seq_num = 0u32;
+    loop {
+        let host = cpal::default_host();
+        let device = match host.default_input_device() {
+            Some(d) => d,
+            None => {
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
 
-    let stream = device.build_input_stream(
-        &config,
-        move |data: &[f32], _| {
-            let st = state.lock().unwrap();
+        let supported_config = match device.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[SERVER-MIC] Błąd default_input_config: {}", e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        let in_channels = supported_config.channels() as usize;
+        let in_sample_rate = supported_config.sample_rate().0;
+        let sample_format = supported_config.sample_format();
+        let in_config = supported_config.config();
+
+        let socket = match UdpSocket::bind("0.0.0.0:0") {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[SERVER-MIC] Błąd bind UDP: {}", e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        let stream_error = Arc::new(AtomicBool::new(false));
+        let stream_error_cb = stream_error.clone();
+        let state_mic = state.clone();
+        let mut seq_num = 0u32;
+
+        let err_fn = move |err| {
+            eprintln!("[SERVER-MIC] Błąd strumienia: {}", err);
+            stream_error_cb.store(true, Ordering::SeqCst);
+        };
+
+        let mut on_mono_samples = move |mono_samples: &[f32]| {
+            let st = state_mic.lock().unwrap();
             if !st.is_broadcasting {
                 return;
             }
@@ -221,13 +250,32 @@ pub fn capture_and_broadcast(state: SharedServerState) {
             seq_num += 1;
             let name_bytes = b"Nauczyciel";
             let name_len = name_bytes.len() as u8;
-            let mut packet = Vec::with_capacity(13 + name_len as usize + data.len() * 2);
+
+            let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
+                let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
+                let out_len = ((mono_samples.len() as f64) / ratio).round() as usize;
+                let mut out = Vec::with_capacity(out_len);
+                for i in 0..out_len {
+                    let pos = i as f64 * ratio;
+                    let idx0 = pos.floor() as usize;
+                    let idx1 = (idx0 + 1).min(mono_samples.len().saturating_sub(1));
+                    let frac = (pos - idx0 as f64) as f32;
+                    let s0 = mono_samples.get(idx0).copied().unwrap_or(0.0);
+                    let s1 = mono_samples.get(idx1).copied().unwrap_or(0.0);
+                    out.push(s0 * (1.0 - frac) + s1 * frac);
+                }
+                out
+            } else {
+                mono_samples.to_vec()
+            };
+
+            let mut packet = Vec::with_capacity(13 + name_len as usize + samples_48k.len() * 2);
             let _ = packet.write_u32::<BigEndian>(seq_num);
             let _ = packet.write_f64::<BigEndian>(current_time());
             packet.push(name_len);
             packet.extend_from_slice(name_bytes);
 
-            for &sample in data {
+            for &sample in &samples_48k {
                 let clamped = sample.clamp(-1.0, 1.0);
                 let _ = packet.write_i16::<BigEndian>((clamped * 32767.0) as i16);
             }
@@ -235,51 +283,122 @@ pub fn capture_and_broadcast(state: SharedServerState) {
             for target_addr in st.ip_to_addr.values() {
                 let _ = socket.send_to(&packet, target_addr);
             }
-        },
-        |_| {},
-        None,
-    );
+        };
 
-    if let Ok(s) = stream {
-        let _ = s.play();
-        std::thread::park();
+        let stream_res = match sample_format {
+            cpal::SampleFormat::F32 => {
+                device.build_input_stream(
+                    &in_config,
+                    move |data: &[f32], _| {
+                        let mono: Vec<f32> = if in_channels > 1 {
+                            data.chunks(in_channels)
+                                .map(|ch| ch.iter().sum::<f32>() / in_channels as f32)
+                                .collect()
+                        } else {
+                            data.to_vec()
+                        };
+                        on_mono_samples(&mono);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                device.build_input_stream(
+                    &in_config,
+                    move |data: &[i16], _| {
+                        let mono: Vec<f32> = if in_channels > 1 {
+                            data.chunks(in_channels)
+                                .map(|ch| (ch.iter().map(|&s| s as f32).sum::<f32>() / in_channels as f32) / 32768.0)
+                                .collect()
+                        } else {
+                            data.iter().map(|&s| (s as f32) / 32768.0).collect()
+                        };
+                        on_mono_samples(&mono);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            _ => {
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        if let Ok(s) = stream_res {
+            let _ = s.play();
+            while !stream_error.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        } else if let Err(e) = stream_res {
+            eprintln!("[SERVER-MIC] Błąd inicjalizacji mikrofonu: {}", e);
+            std::thread::sleep(Duration::from_secs(2));
+        }
     }
 }
 
 pub fn play_teacher_audio(audio_streams: TeacherAudioBuffer) {
-    let host = cpal::default_host();
-    let device = match host.default_output_device() {
-        Some(d) => d,
-        None => return,
-    };
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Default,
-    };
+    loop {
+        let host = cpal::default_host();
+        let device = match host.default_output_device() {
+            Some(d) => d,
+            None => {
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
 
-    let stream = device.build_output_stream(
-        &config,
-        move |out_data: &mut [f32], _| {
-            let mut streams = audio_streams.lock().unwrap();
-            for sample in out_data.iter_mut() {
-                let mut mixed = 0.0f32;
-                for (_, buf) in streams.iter_mut() {
-                    if let Some(s) = buf.pop_front() {
-                        mixed += s;
+        let supported_out_config = match device.default_output_config() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[SERVER-AUDIO-OUT] Błąd default_output_config: {}", e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        let out_channels = supported_out_config.channels() as usize;
+        let out_config = supported_out_config.config();
+        let streams_playback = audio_streams.clone();
+        let stream_error = Arc::new(AtomicBool::new(false));
+        let stream_error_cb = stream_error.clone();
+
+        let stream = device.build_output_stream(
+            &out_config,
+            move |out_data: &mut [f32], _| {
+                let mut streams = streams_playback.lock().unwrap();
+                for frame in out_data.chunks_mut(out_channels) {
+                    let mut mixed = 0.0f32;
+                    for (_, buf) in streams.iter_mut() {
+                        if let Some(s) = buf.pop_front() {
+                            mixed += s;
+                        }
+                    }
+                    let sample_val = mixed.clamp(-1.0, 1.0);
+                    for ch in frame.iter_mut() {
+                        *ch = sample_val;
                     }
                 }
-                *sample = mixed.clamp(-1.0, 1.0);
-            }
-            streams.retain(|_, buf| !buf.is_empty());
-        },
-        |_| {},
-        None,
-    );
+                streams.retain(|_, buf| !buf.is_empty());
+            },
+            move |err| {
+                eprintln!("[SERVER-AUDIO-OUT] Błąd strumienia: {}", err);
+                stream_error_cb.store(true, Ordering::SeqCst);
+            },
+            None,
+        );
 
-    if let Ok(s) = stream {
-        let _ = s.play();
-        std::thread::park();
+        if let Ok(s) = stream {
+            let _ = s.play();
+            while !stream_error.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        } else if let Err(e) = stream {
+            eprintln!("[SERVER-AUDIO-OUT] Błąd inicjalizacji wyjścia audio nauczyciela: {}", e);
+            std::thread::sleep(Duration::from_secs(2));
+        }
     }
 }
+
 

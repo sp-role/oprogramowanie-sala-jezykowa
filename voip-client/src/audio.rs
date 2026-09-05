@@ -123,11 +123,19 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
             }
         };
 
-        let config = cpal::StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(SAMPLE_RATE),
-            buffer_size: cpal::BufferSize::Default,
+        let supported_config = match device.default_input_config() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[AUDIO-MIC] Błąd default_input_config dla urządzenia: {}", e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
         };
+
+        let in_channels = supported_config.channels() as usize;
+        let in_sample_rate = supported_config.sample_rate().0;
+        let sample_format = supported_config.sample_format();
+        let in_config = supported_config.config();
 
         let mut last_speech = Instant::now() - Duration::from_secs(10);
         let audio_state = state.clone();
@@ -143,40 +151,65 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
         let stream_error = Arc::new(AtomicBool::new(false));
         let stream_error_cb = stream_error.clone();
 
-        let stream = device.build_input_stream(
-            &config,
-            move |data: &[f32], _| {
-                let max_amp = data.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                let now = current_time();
+        let err_fn = move |err| {
+            eprintln!("[AUDIO-MIC BŁĄD] CPAL zgłosił błąd mikrofonu: {}", err);
+            stream_error_cb.store(true, Ordering::SeqCst);
+        };
 
-                let (target_addr, packet, is_loopback) = {
-                    let mut st = audio_state.lock().unwrap();
-                    let vad_threshold = st.vad_threshold;
-                    let is_speech = max_amp >= vad_threshold;
-                    if is_speech {
-                        last_speech = Instant::now();
-                    }
+        let mut on_mono_samples = move |mono_samples: &[f32]| {
+            let max_amp = mono_samples.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+            let now = current_time();
 
-                    let speech_active = last_speech.elapsed() < Duration::from_millis(350);
-                    let is_teacher_talking = (now - st.last_teacher_broadcast) < 0.6;
-                    st.is_muted_by_teacher = is_teacher_talking;
-                    st.is_speaking = speech_active && !is_teacher_talking;
+            let (target_addr, packet, is_loopback, loopback_samples) = {
+                let mut st = audio_state.lock().unwrap();
+                let vad_threshold = st.vad_threshold;
+                let is_speech = max_amp >= vad_threshold;
+                if is_speech {
+                    last_speech = Instant::now();
+                }
 
-                    // Płynny wskaźnik mic_level z opadaniem (decay)
-                    let instant_level = (max_amp * 4.0).min(1.0);
-                    st.mic_level = if instant_level > st.mic_level {
-                        instant_level
+                let speech_active = last_speech.elapsed() < Duration::from_millis(350);
+                let is_teacher_talking = (now - st.last_teacher_broadcast) < 0.6;
+                st.is_muted_by_teacher = is_teacher_talking;
+                st.is_speaking = speech_active && !is_teacher_talking;
+
+                let is_loopback = st.is_mic_test_active && now < st.mic_test_until;
+                if !is_loopback && st.is_mic_test_active {
+                    st.is_mic_test_active = false;
+                }
+
+                // Płynny wskaźnik mic_level z decay
+                let instant_level = (max_amp * 4.0).min(1.0);
+                st.mic_level = if instant_level > st.mic_level {
+                    instant_level
+                } else {
+                    st.mic_level * 0.86
+                };
+
+                if !(speech_active || is_loopback) || (is_teacher_talking && !is_loopback) || !crate::licensing::is_activated() {
+                    (None, None, is_loopback, Vec::new())
+                } else {
+                    // Resampling do 48000 Hz jeśli urządzenie pracuje z inną częstotliwością
+                    let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
+                        let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
+                        let out_len = ((mono_samples.len() as f64) / ratio).round() as usize;
+                        let mut out = Vec::with_capacity(out_len);
+                        for i in 0..out_len {
+                            let pos = i as f64 * ratio;
+                            let idx0 = pos.floor() as usize;
+                            let idx1 = (idx0 + 1).min(mono_samples.len().saturating_sub(1));
+                            let frac = (pos - idx0 as f64) as f32;
+                            let s0 = mono_samples.get(idx0).copied().unwrap_or(0.0);
+                            let s1 = mono_samples.get(idx1).copied().unwrap_or(0.0);
+                            out.push(s0 * (1.0 - frac) + s1 * frac);
+                        }
+                        out
                     } else {
-                        st.mic_level * 0.86
+                        mono_samples.to_vec()
                     };
 
-                    let is_loopback = st.is_mic_test_active && now < st.mic_test_until;
-                    if !is_loopback && st.is_mic_test_active {
-                        st.is_mic_test_active = false;
-                    }
-
-                    if !speech_active || is_teacher_talking || !crate::licensing::is_activated() || st.server_ip.is_none() {
-                        (None, None, is_loopback)
+                    if st.server_ip.is_none() {
+                        (None, None, is_loopback, samples_48k)
                     } else {
                         let server_ip = st.server_ip.as_ref().unwrap();
                         let target_addr = format!("{}:{}", server_ip, PORT_AUDIO);
@@ -189,48 +222,99 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                         let name_bytes = username.as_bytes();
                         let name_len = (name_bytes.len().min(64)) as u8;
 
-                        let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (data.len() * 2));
+                        let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (samples_48k.len() * 2));
                         let _ = pkt.write_u32::<BigEndian>(st.seq_num);
                         let _ = pkt.write_f64::<BigEndian>(now);
                         pkt.push(name_len);
                         pkt.extend_from_slice(&name_bytes[..name_len as usize]);
 
-                        for &sample in data {
+                        for &sample in &samples_48k {
                             let clamped = sample.clamp(-1.0, 1.0);
                             let _ = pkt.write_i16::<BigEndian>((clamped * 32767.0) as i16);
                         }
 
-                        (Some(target_addr), Some(pkt), is_loopback)
-                    }
-                };
-
-                // Odsłuch testowy mikrofonu (Loopback) w słuchawkach
-                if is_loopback {
-                    if let Ok(mut streams) = loopback_streams.try_lock() {
-                        let buf = streams.entry("__mic_test__".to_string()).or_default();
-                        if buf.len() > 4800 {
-                            buf.clear();
-                        }
-                        buf.extend(data.iter().copied());
+                        (Some(target_addr), Some(pkt), is_loopback, samples_48k)
                     }
                 }
+            };
 
-                // Wysłanie pakietu audio do serwera
-                if let (Some(addr), Some(pkt)) = (target_addr, packet) {
-                    let _ = audio_socket.send_to(&pkt, addr);
+            // Odsłuch testowy mikrofonu (Loopback) w słuchawkach
+            if is_loopback && !loopback_samples.is_empty() {
+                if let Ok(mut streams) = loopback_streams.try_lock() {
+                    let buf = streams.entry("__mic_test__".to_string()).or_default();
+                    if buf.len() > 4800 {
+                        buf.clear();
+                    }
+                    buf.extend(loopback_samples);
                 }
-            },
-            move |err| {
-                eprintln!("[AUDIO-MIC BŁĄD] CPAL zgłosił błąd mikrofonu: {}", err);
-                stream_error_cb.store(true, Ordering::SeqCst);
-            },
-            None,
-        );
+            }
 
-        if let Ok(s) = stream {
+            // Wysłanie pakietu audio do serwera
+            if let (Some(addr), Some(pkt)) = (target_addr, packet) {
+                let _ = audio_socket.send_to(&pkt, addr);
+            }
+        };
+
+        let stream_res = match sample_format {
+            cpal::SampleFormat::F32 => {
+                device.build_input_stream(
+                    &in_config,
+                    move |data: &[f32], _| {
+                        let mono: Vec<f32> = if in_channels > 1 {
+                            data.chunks(in_channels).map(|ch| ch.iter().sum::<f32>() / in_channels as f32).collect()
+                        } else {
+                            data.to_vec()
+                        };
+                        on_mono_samples(&mono);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                device.build_input_stream(
+                    &in_config,
+                    move |data: &[i16], _| {
+                        let mono: Vec<f32> = if in_channels > 1 {
+                            data.chunks(in_channels)
+                                .map(|ch| (ch.iter().map(|&s| s as f32).sum::<f32>() / in_channels as f32) / 32768.0)
+                                .collect()
+                        } else {
+                            data.iter().map(|&s| (s as f32) / 32768.0).collect()
+                        };
+                        on_mono_samples(&mono);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                device.build_input_stream(
+                    &in_config,
+                    move |data: &[u16], _| {
+                        let mono: Vec<f32> = if in_channels > 1 {
+                            data.chunks(in_channels)
+                                .map(|ch| ((ch.iter().map(|&s| s as f32).sum::<f32>() / in_channels as f32) - 32768.0) / 32768.0)
+                                .collect()
+                        } else {
+                            data.iter().map(|&s| ((s as f32) - 32768.0) / 32768.0).collect()
+                        };
+                        on_mono_samples(&mono);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            f => {
+                eprintln!("[AUDIO-MIC] Nieobsługiwany format próbek urządzenia: {:?}", f);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        if let Ok(s) = stream_res {
             let _ = s.play();
             let chosen_input = state.lock().unwrap().selected_input_device.clone();
-            // Czekaj tak długo, jak strumień działa poprawnie i urządzenie nie uległo zmianie
             while !stream_error.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(250));
                 let desired_input = state.lock().unwrap().selected_input_device.clone();
@@ -239,7 +323,8 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     break;
                 }
             }
-        } else {
+        } else if let Err(e) = stream_res {
+            eprintln!("[AUDIO-MIC] Błąd inicjalizacji strumienia wejściowego: {}", e);
             std::thread::sleep(Duration::from_secs(2));
         }
     }
@@ -271,11 +356,17 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                 }
             };
 
-            let config = cpal::StreamConfig {
-                channels: 1,
-                sample_rate: cpal::SampleRate(SAMPLE_RATE),
-                buffer_size: cpal::BufferSize::Default,
+            let supported_out_config = match device.default_output_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("[AUDIO-OUT] Błąd default_output_config: {}", e);
+                    std::thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
             };
+
+            let out_channels = supported_out_config.channels() as usize;
+            let out_config = supported_out_config.config();
 
             let streams_playback = playback_streams.clone();
             let state_playback = playback_state.clone();
@@ -283,18 +374,21 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
             let stream_error_cb = stream_error.clone();
 
             let stream = device.build_output_stream(
-                &config,
+                &out_config,
                 move |out_data: &mut [f32], _| {
                     let vol = state_playback.lock().unwrap().volume;
                     let mut streams = streams_playback.lock().unwrap();
-                    for sample in out_data.iter_mut() {
+                    for frame in out_data.chunks_mut(out_channels) {
                         let mut mixed = 0.0f32;
                         for (_, buf) in streams.iter_mut() {
                             if let Some(s) = buf.pop_front() {
                                 mixed += s;
                             }
                         }
-                        *sample = (mixed * vol).clamp(-1.0, 1.0);
+                        let sample_val = (mixed * vol).clamp(-1.0, 1.0);
+                        for ch in frame.iter_mut() {
+                            *ch = sample_val;
+                        }
                     }
                     streams.retain(|_, buf| !buf.is_empty());
                 },
@@ -316,7 +410,8 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                         break;
                     }
                 }
-            } else {
+            } else if let Err(e) = stream {
+                eprintln!("[AUDIO-OUT] Błąd inicjalizacji odtwarzacza: {}", e);
                 std::thread::sleep(Duration::from_secs(2));
             }
         }

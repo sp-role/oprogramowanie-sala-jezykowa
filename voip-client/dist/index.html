@@ -225,6 +225,15 @@
           <option value="default">Domyślny mikrofon systemowy</option>
         </select>
 
+        <!-- Ostrzeżenie o braku fizycznego mikrofonu -->
+        <div id="settings-no-mic-warning" class="hidden mt-2 bg-amber-50 border border-amber-300 rounded-xl p-2.5 text-xs flex items-start gap-2 text-amber-800">
+          <span class="text-base leading-none">⚠️</span>
+          <div>
+            <span class="font-bold">System nie wykrywa mikrofonu</span>
+            <p class="text-[11px] text-amber-700 mt-0.5 leading-snug">Podłącz zestaw słuchawkowy z mikrofonem (gniazdo jack 3.5mm lub USB) do komputera. Urządzenie pojawi się automatycznie.</p>
+          </div>
+        </div>
+
         <!-- VU Meter -->
         <div class="mt-2.5 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
           <div class="flex items-center justify-between text-[11px] text-slate-500 mb-1.5 font-medium">
