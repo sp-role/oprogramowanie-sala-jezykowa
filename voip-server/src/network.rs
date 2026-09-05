@@ -275,6 +275,13 @@ pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now:
     if let Some(members) = st.groups.get(room) {
         members
             .iter()
+            .filter(|ip| {
+                // Wyklucz uczniów nieaktywnych (timeout powyżej 12 sekund)
+                st.client_stats
+                    .get(*ip)
+                    .map(|s| (now - s.last_seen) < crate::state::CLIENT_TIMEOUT_SECS)
+                    .unwrap_or(false)
+            })
             .map(|ip| {
                 let name = st.ip_to_name.get(ip).cloned().unwrap_or_else(|| format!("Uczeń ({})", ip));
                 let stat = st.client_stats.get(ip);
@@ -477,6 +484,33 @@ pub fn run_dashboard_updater(
             .filter(|(_, data)| now - data.last_seen < CLIENT_TIMEOUT_SECS)
             .map(|(ip, _)| ip.clone())
             .collect();
+
+        // Wykrywanie i usuwanie rozłączonych uczniów z pokoi (Ghost Students Fix)
+        let mut rooms_to_notify: Vec<(String, Vec<String>)> = Vec::new();
+        for (room, members) in st.groups.iter_mut() {
+            let initial_count = members.len();
+            members.retain(|ip| active_ips.contains(ip));
+            if members.len() != initial_count {
+                rooms_to_notify.push((room.clone(), members.clone()));
+            }
+        }
+
+        // Posprzątaj nieaktywne IP z przypisań pokoi
+        st.ip_to_group.retain(|ip, _| active_ips.contains(ip));
+
+        // Powiadom natychmiast pozostałych członków pokoju o rozłączeniu partnera
+        for (room, remaining_ips) in rooms_to_notify {
+            let updated_members = get_room_members_payload(&st, &room, now);
+            let updated_json = serde_json::to_string(&updated_members).unwrap_or_default();
+            let msg = format!("VOIP_ROOM:{}|{}", room, updated_json);
+            for mem_ip in &remaining_ips {
+                if let Some(target_addr) = st.ip_to_addr.get(mem_ip).cloned() {
+                    if let Some(ref sock) = st.audio_socket {
+                        let _ = sock.send_to(msg.as_bytes(), target_addr);
+                    }
+                }
+            }
+        }
 
         let mbps = (st.total_bytes_sec as f64 * 8.0 * 5.0) / (1024.0 * 1024.0);
         st.total_bytes_sec = 0;

@@ -603,49 +603,249 @@ function renderSkypeGrid(data) {
   }
 }
 
+let isHandRaised = false;
+
+function raiseHand() {
+  const tauri = getTauri();
+  isHandRaised = !isHandRaised;
+  if (tauri && tauri.invoke) {
+    if (isHandRaised) {
+      tauri.invoke('raise_hand').catch(() => {});
+    }
+  }
+
+  // Przycisk w Poczekalni
+  const lobbyBtn = document.getElementById('raise-hand-btn');
+  if (lobbyBtn) {
+    if (isHandRaised) {
+      lobbyBtn.innerHTML = `
+        <svg class="w-5 h-5 fill-current animate-bounce" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+        <span class="text-xs font-bold uppercase tracking-wide">Zgłoszono do nauczyciela! (Kliknij, aby cofnąć)</span>
+      `;
+      lobbyBtn.className = 'w-full bg-[#16a34a] hover:bg-[#15803d] active:scale-[0.98] text-white font-bold py-3.5 px-4 rounded-2xl shadow-sm flex items-center justify-center gap-2.5 transition-all duration-150 cursor-pointer';
+    } else {
+      lobbyBtn.innerHTML = `
+        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
+          <path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/>
+        </svg>
+        <span class="text-xs font-bold tracking-wide uppercase">Poproś o pomoc nauczyciela</span>
+      `;
+      lobbyBtn.className = 'w-full bg-[#1e3a5f] hover:bg-[#152843] active:scale-[0.98] text-white font-bold py-3.5 px-4 rounded-2xl shadow-sm flex items-center justify-center gap-2.5 transition-all duration-150 cursor-pointer';
+    }
+  }
+
+  // Przycisk w doku Skype
+  const skypeHandBtn = document.getElementById('skype-raise-hand-btn');
+  if (skypeHandBtn) {
+    if (isHandRaised) {
+      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 ring-4 ring-amber-400/40 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-pulse';
+      skypeHandBtn.title = 'Pomoc wezwana (kliknij, aby cofnąć)';
+      showToast('Zgłoszono prośbę o pomoc do nauczyciela', 'info');
+    } else {
+      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
+      skypeHandBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
+      showToast('Cofnięto prośbę o pomoc', 'info');
+    }
+  }
+}
+
+function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false) {
+  const micIconBox = document.getElementById('mic-icon-box');
+  const micStatusLabel = document.getElementById('mic-status-label');
+  const broadcastBanner = document.getElementById('teacher-broadcast-banner');
+  const bars = [
+    document.getElementById('bar-1'),
+    document.getElementById('bar-2'),
+    document.getElementById('bar-3'),
+    document.getElementById('bar-4'),
+  ];
+
+  if (isMutedByTeacher) {
+    if (broadcastBanner) broadcastBanner.classList.remove('hidden');
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center transition-all duration-200 shadow-sm';
+    if (micStatusLabel) {
+      micStatusLabel.innerText = 'Wyciszony (Ogłoszenie)';
+      micStatusLabel.className = 'text-xs font-bold text-amber-700';
+    }
+    bars.forEach((b) => b && (b.className = 'w-1 h-2 bg-amber-300 rounded-full'));
+    return;
+  }
+
+  if (broadcastBanner) broadcastBanner.classList.add('hidden');
+
+  if (isMicTest) {
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center transition-all duration-200 shadow-sm';
+    if (micStatusLabel) {
+      micStatusLabel.innerText = 'Test mikrofonu';
+      micStatusLabel.className = 'text-xs font-bold text-purple-700';
+    }
+    if (bars[0]) bars[0].className = 'w-1 h-3.5 bg-purple-500 rounded-full animate-pulse';
+    if (bars[1]) bars[1].className = 'w-1 h-5 bg-purple-500 rounded-full animate-pulse delay-75';
+    if (bars[2]) bars[2].className = 'w-1 h-4 bg-purple-500 rounded-full animate-pulse delay-150';
+    if (bars[3]) bars[3].className = 'w-1 h-3 bg-purple-500 rounded-full animate-pulse delay-100';
+    return;
+  }
+
+  if (isSpeaking) {
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center transition-all duration-200 shadow-sm';
+    if (micStatusLabel) {
+      micStatusLabel.innerText = 'Mówisz teraz (Aktywny)';
+      micStatusLabel.className = 'text-xs font-bold text-emerald-700';
+    }
+    if (bars[0]) bars[0].className = 'w-1 h-3.5 bg-emerald-500 rounded-full animate-pulse';
+    if (bars[1]) bars[1].className = 'w-1 h-5 bg-emerald-500 rounded-full animate-pulse delay-75';
+    if (bars[2]) bars[2].className = 'w-1 h-4 bg-emerald-500 rounded-full animate-pulse delay-150';
+    if (bars[3]) bars[3].className = 'w-1 h-3 bg-purple-500 rounded-full animate-pulse delay-100';
+  } else {
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200';
+    if (micStatusLabel) {
+      micStatusLabel.innerText = 'Czuwanie (VAD)';
+      micStatusLabel.className = 'text-xs font-bold text-slate-700';
+    }
+    if (bars[0]) bars[0].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
+    if (bars[1]) bars[1].className = 'w-1 h-3 bg-slate-300 rounded-full transition-all duration-150';
+    if (bars[2]) bars[2].className = 'w-1 h-4 bg-slate-300 rounded-full transition-all duration-150';
+    if (bars[3]) bars[3].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
+  }
+}
+async function toggleSelfMute() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    try {
+      const isMuted = await tauri.invoke('toggle_self_mute');
+      const muteBtn = document.getElementById('skype-mute-btn');
+      const iconUnmuted = document.getElementById('skype-mute-icon-unmuted');
+      const iconMuted = document.getElementById('skype-mute-icon-muted');
+      if (muteBtn && iconUnmuted && iconMuted) {
+        if (isMuted) {
+          muteBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-red-600 hover:bg-red-700 ring-4 ring-red-500/30 text-white flex items-center justify-center transition shadow-lg shadow-red-600/25 cursor-pointer';
+          iconUnmuted.classList.add('hidden');
+          iconMuted.classList.remove('hidden');
+          muteBtn.title = 'Mikrofon wyciszony (kliknij, aby włączyć)';
+          showToast('Wyciszono mikrofon', 'info');
+        } else {
+          muteBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition shadow-md cursor-pointer';
+          iconUnmuted.classList.remove('hidden');
+          iconMuted.classList.add('hidden');
+          muteBtn.title = 'Wycisz mikrofon';
+          showToast('Mikrofon aktywny', 'success');
+        }
+      }
+    } catch (e) {
+      console.error('Błąd toggle_self_mute:', e);
+    }
+  }
+}
+
+async function handleHangupClick() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    try {
+      await tauri.invoke('leave_room');
+      showToast('Opuszczono pokój. Powrót do Poczekalni.', 'info');
+      const viewLobby = document.getElementById('view-lobby');
+      const viewSkype = document.getElementById('view-skype-call');
+      if (viewLobby) viewLobby.classList.remove('hidden');
+      if (viewSkype) viewSkype.classList.add('hidden');
+      const groupElem = document.getElementById('group-name');
+      if (groupElem) groupElem.innerText = 'Poczekalnia';
+      const roomBadge = document.getElementById('room-badge');
+      if (roomBadge) {
+        roomBadge.innerText = 'Poczekalnia';
+        roomBadge.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500';
+      }
+    } catch (e) {
+      console.error('Błąd leave_room:', e);
+    }
+  }
+}
+
 function applyClientStatus(data) {
   if (!data) return;
-
-  const roomTitle = document.getElementById('skype-room-title');
-  const countBadge = document.getElementById('skype-participant-count');
-  const statusDot = document.getElementById('skype-room-status-dot');
 
   const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
   const groupDisplay = isRoom ? data.group : 'Poczekalnia';
 
-  if (roomTitle) roomTitle.innerText = groupDisplay;
+  const viewLobby = document.getElementById('view-lobby');
+  const viewSkype = document.getElementById('view-skype-call');
 
-  if (statusDot) {
-    if (data.connected) {
-      statusDot.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
-    } else {
-      statusDot.className = 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+  if (isRoom) {
+    if (viewLobby) viewLobby.classList.add('hidden');
+    if (viewSkype) viewSkype.classList.remove('hidden');
+  } else {
+    if (viewLobby) viewLobby.classList.remove('hidden');
+    if (viewSkype) viewSkype.classList.add('hidden');
+  }
+
+  const ipElem = document.getElementById('server-ip');
+  if (ipElem) ipElem.innerText = data.server_ip;
+  const groupElem = document.getElementById('group-name');
+  if (groupElem) groupElem.innerText = groupDisplay;
+
+  const roomBadge = document.getElementById('room-badge');
+  if (roomBadge) {
+    roomBadge.innerText = groupDisplay;
+    roomBadge.className = isRoom
+      ? 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300'
+      : 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500';
+  }
+
+  const badge = document.getElementById('status-badge');
+  const statusDot = document.getElementById('status-dot');
+  if (data.connected) {
+    if (badge) {
+      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span>Połączono</span>';
+      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
     }
+    if (statusDot) statusDot.className = 'absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm';
+  } else {
+    const msg = data.server_ip.includes('Wpisz') ? 'Brak imienia' : data.server_ip.includes('brak odp') ? 'Brak odp.' : 'Szukanie...';
+    if (badge) {
+      badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span><span>${msg}</span>`;
+      badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200';
+    }
+    if (statusDot) statusDot.className = 'absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-amber-500 rounded-full border-2 border-white shadow-sm';
   }
 
-  // Liczba uczestników
+  updateMicState(data.is_speaking, data.is_muted_by_teacher, data.is_mic_test_active);
+
+  const lobbyVolSlider = document.getElementById('client-volume-slider');
+  const lobbyVolPct = document.getElementById('client-volume-pct');
+  const pctValue = Math.round((data.volume || 1.0) * 100);
+  if (lobbyVolSlider && document.activeElement !== lobbyVolSlider) lobbyVolSlider.value = pctValue;
+  if (lobbyVolPct) lobbyVolPct.innerText = `${pctValue}%`;
+
+  const teacherBroadcastBanner = document.getElementById('teacher-broadcast-banner');
+  if (teacherBroadcastBanner) {
+    if (data.is_muted_by_teacher) teacherBroadcastBanner.classList.remove('hidden');
+    else teacherBroadcastBanner.classList.add('hidden');
+  }
+
+  const roomTitle = document.getElementById('skype-room-title');
+  const countBadge = document.getElementById('skype-participant-count');
+  const skypeStatusDot = document.getElementById('skype-room-status-dot');
+
+  if (roomTitle) roomTitle.innerText = groupDisplay;
+  if (skypeStatusDot) {
+    skypeStatusDot.className = data.connected
+      ? 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse'
+      : 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
+  }
+
   const membersCount = isRoom ? Math.max(1, (data.room_members || []).length) : 1;
-  if (countBadge) {
-    countBadge.innerText = membersCount === 1 ? '1 uczestnik' : `${membersCount} uczestników`;
-  }
+  if (countBadge) countBadge.innerText = membersCount === 1 ? '1 uczestnik' : `${membersCount} uczestników`;
 
-  // Podgląd własnego profilu na pasku
   const selfAvatarPreview = document.getElementById('skype-self-avatar-preview');
   const selfNamePreview = document.getElementById('skype-self-name-preview');
   if (selfAvatarPreview) selfAvatarPreview.innerText = getAvatarEmoji(selectedAvatarId);
   if (selfNamePreview) selfNamePreview.innerText = (localStorage.getItem('voip_username') || 'Uczeń').trim();
 
-  // Baner ogłoszenia nauczyciela
-  const broadcastBanner = document.getElementById('skype-broadcast-banner');
-  if (broadcastBanner) {
-    if (data.is_muted_by_teacher) {
-      broadcastBanner.classList.remove('hidden');
-    } else {
-      broadcastBanner.classList.add('hidden');
-    }
+  const skypeBroadcastBanner = document.getElementById('skype-broadcast-banner');
+  if (skypeBroadcastBanner) {
+    if (data.is_muted_by_teacher) skypeBroadcastBanner.classList.remove('hidden');
+    else skypeBroadcastBanner.classList.add('hidden');
   }
 
-  // Przycisk wyciszenia mikrofonu
   const muteBtn = document.getElementById('skype-mute-btn');
   const iconUnmuted = document.getElementById('skype-mute-icon-unmuted');
   const iconMuted = document.getElementById('skype-mute-icon-muted');
@@ -663,34 +863,25 @@ function applyClientStatus(data) {
     }
   }
 
-  // Suwak głośności w doku
-  const volSlider = document.getElementById('skype-volume-slider');
-  const volPct = document.getElementById('skype-volume-pct');
-  const pctValue = Math.round((data.volume || 1.0) * 100);
-  if (volSlider && document.activeElement !== volSlider) {
-    volSlider.value = pctValue;
-  }
-  if (volPct) volPct.innerText = `${pctValue}%`;
+  const skypeVolSlider = document.getElementById('skype-volume-slider');
+  const skypeVolPct = document.getElementById('skype-volume-pct');
+  if (skypeVolSlider && document.activeElement !== skypeVolSlider) skypeVolSlider.value = pctValue;
+  if (skypeVolPct) skypeVolPct.innerText = `${pctValue}%`;
 
-  // Powiadomienie toast o zmianie pokoju
   if (lastAssignedGroup !== null && lastAssignedGroup !== data.group) {
-    if (isRoom) {
-      showToast(`Przydzielono Cię do: ${data.group}`, 'success');
-    } else {
-      showToast('Przeniesiono Cię do Poczekalni', 'info');
-    }
+    if (isRoom) showToast(`Przydzielono Cię do: ${data.group}`, 'success');
+    else showToast('Przeniesiono Cię do Poczekalni', 'info');
   }
   lastAssignedGroup = data.group;
 
-  // Renderowanie kafelków Skype
-  renderSkypeGrid(data);
+  if (isRoom) {
+    renderSkypeGrid(data);
+  }
 
-  // Aktualizacja wskaźnika mikrofonu w ustawieniach
   if (data.mic_level !== undefined) {
     updateSettingsMicMeter(data.mic_level);
   }
 
-  // Aktualizacja stanu przycisku testu mikrofonu (Nagrywanie 5s -> Czysty odsłuch 5s -> Gotowe)
   const micTestBtn = document.getElementById('settings-test-mic-btn');
   const micTestText = document.getElementById('settings-test-mic-text');
   if (micTestBtn && micTestText && !micTestBtn.disabled) {
@@ -1104,8 +1295,10 @@ async function initClientAppVersion() {
   if (!tauri || !tauri.invoke) return;
   try {
     const version = await tauri.invoke('get_app_version');
-    const badge = document.getElementById('client-version-badge');
-    if (badge) badge.innerText = `v${version}`;
+    const badge1 = document.getElementById('client-version-badge');
+    const badge2 = document.getElementById('client-version-badge-skype');
+    if (badge1) badge1.innerText = `v${version}`;
+    if (badge2) badge2.innerText = `v${version}`;
   } catch (err) {
     console.error('Błąd pobierania wersji klienta:', err);
   }
