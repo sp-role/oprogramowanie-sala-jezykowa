@@ -12,6 +12,32 @@ function getTauri() {
     : null;
 }
 
+// Przechwytywanie błędów JavaScript do Sentry
+window.addEventListener('error', (event) => {
+  try {
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('report_frontend_error', {
+        message: event.message || 'Błąd JS w widoku serwera',
+        stack: event.error ? event.error.stack : `${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}`
+      }).catch(() => {});
+    }
+  } catch (e) {}
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  try {
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('report_frontend_error', {
+        message: `Unhandled Promise: ${event.reason?.message || event.reason}`,
+        stack: event.reason?.stack || null
+      }).catch(() => {});
+    }
+  } catch (e) {}
+});
+
+
 // System nowoczesnych powiadomień Toast (zastępuje surowe alerty)
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -100,9 +126,26 @@ function windowToggleMaximize() {
 }
 
 function windowClose() {
-  const tauri = getTauri();
-  if (tauri && tauri.invoke) tauri.invoke('window_close');
+  openExitModal();
 }
+
+function openExitModal() {
+  document.getElementById('exit-modal')?.classList.remove('hidden');
+}
+
+function closeExitModal() {
+  document.getElementById('exit-modal')?.classList.add('hidden');
+}
+
+function confirmExitApp() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('window_close');
+  } else {
+    window.close();
+  }
+}
+
 
 async function copyHardwareId() {
   if (!currentHardwareId) return;
@@ -213,7 +256,33 @@ async function startServerAction() {
   renderRooms();
   initAdminCheck();
   initDashboardListener();
+  checkAndPromptFirewall();
   showToast(`Uruchomiono serwer z ${numRooms} pokojami`, 'success');
+}
+
+async function checkAndPromptFirewall() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    const isConfigured = await tauri.invoke('check_firewall_rule');
+    if (!isConfigured) {
+      await tauri.invoke('add_firewall_rule');
+    }
+  } catch (e) {
+    console.warn('Firewall auto-check:', e);
+  }
+}
+
+async function handleFirewall() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    showToast('Konfigurowanie Zapory Windows...', 'info');
+    const res = await tauri.invoke('add_firewall_rule');
+    showToast(res, 'success');
+  } catch (err) {
+    showToast(`Błąd zapory: ${err.message || err}`, 'error');
+  }
 }
 
 function addNewRoom() {
@@ -222,6 +291,42 @@ function addNewRoom() {
   renderRooms();
   showToast(`Utworzono nową grupę: ${name}`, 'info');
 }
+
+async function autoPairStudents() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  if (globalClientsData.length === 0) {
+    showToast('Brak połączonych uczniów do rozlosowania w pary!', 'warning');
+    return;
+  }
+
+  const neededRooms = Math.ceil(globalClientsData.length / 2);
+  while (roomsList.length < neededRooms) {
+    roomsList.push(`Pokój ${roomsList.length + 1}`);
+  }
+  renderRooms();
+
+  try {
+    await tauri.invoke('auto_pair_clients', { rooms: roomsList });
+    showToast(`Rozlosowano ${globalClientsData.length} uczniów w pary!`, 'success');
+  } catch (err) {
+    showToast(`Błąd losowania par: ${err.message || err}`, 'error');
+  }
+}
+
+async function resetAllToPool() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  try {
+    await tauri.invoke('reset_all_to_pool');
+    showToast('Wszyscy uczniowie zostali przeniesieni do Poczekalni', 'info');
+  } catch (err) {
+    showToast(`Błąd resetowania: ${err.message || err}`, 'error');
+  }
+}
+
 
 function toggleBroadcast(active) {
   const btn = document.getElementById('broadcast-btn');
@@ -264,7 +369,7 @@ function renderRooms() {
       const isListen = activeListenRoom === room;
       return `
       <div class="bg-white rounded-2xl border ${isListen ? 'border-2 border-red-500 shadow-xl ring-4 ring-red-100' : 'border-slate-200/90 shadow-sm'} flex flex-col h-64 transition-all duration-200 overflow-hidden"
-           ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')">
+           ondragover="allowDrop(event)" ondragenter="handleDragEnter(event, this)" ondragleave="handleDragLeave(event, this)" ondrop="dropToRoom(event, '${room}')">
         
         <!-- NAGŁÓWEK POKOJU -->
         <div class="px-4 py-3 border-b flex justify-between items-center ${isListen ? 'bg-red-50/80 border-red-200' : 'bg-slate-50/90 border-slate-200'}">
@@ -281,48 +386,125 @@ function renderRooms() {
           <button onclick="toggleListen('${room}')" class="text-xs px-3 py-1.5 rounded-xl shadow-sm border transition font-semibold flex items-center gap-1.5 cursor-pointer ${isListen ? 'bg-red-600 hover:bg-red-700 text-white border-red-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
             ${isListen 
               ? '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><span>Wyłącz</span>' 
-              : '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M17 20c-.29 0-.56-.06-.76-.15-.71-.37-1.21-.88-1.71-2.38-.51-1.56-1.29-2.39-3-.79-.61-1.61-1.24-2.32-2.53C9.29 10.98 9 9.93 9 9c0-2.8 2.2-5 5-5s5 2.2 5 5h2c0-3.9-3.1-7-7-7s-7 3.1-7 7c0 1.3.4 2.7 1.1 3.9.9 1.6 2 2.5 2.9 3.2.7.6 1.3 1.1 1.6 1.9.4 1.2.7 2.1 1.7 2.6.4.3.9.4 1.4.4 1.1 0 2.1-.9 2.1-2h-2c0 .6-.4 1-.8 1z"/></svg><span>Podsłuch</span>'}
+              : '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H5v-2a7 7 0 1 1 14 0v2h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/></svg><span>Podsłuch</span>'}
           </button>
         </div>
 
         <!-- STREFA ZRZUTU UCZNIÓW -->
-        <div class="flex-1 overflow-y-auto p-2 space-y-1.5 room-drop-zone bg-white" data-room="${room}"></div>
+        <div class="flex-1 overflow-y-auto p-2 space-y-1.5 room-drop-zone bg-white transition" data-room="${room}"
+             ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')"></div>
       </div>
     `;
     })
     .join('');
   updateUIWithData(globalClientsData);
+  updateMediaTargetSelect();
 }
 
+let isDragging = false;
+let isInteractingWithCard = false;
+let currentDraggedIp = null;
+let dragStartTime = 0;
+
+function handleCardMouseDown(ev) {
+  if (ev.target.closest('button') || ev.target.closest('select')) return;
+  isInteractingWithCard = true;
+}
+
+window.addEventListener('mouseup', () => {
+  isInteractingWithCard = false;
+});
+
 function drag(ev) {
-  ev.dataTransfer.setData('text/plain', ev.target.dataset.ip);
+  const card = ev.target.closest('[data-ip]');
+  const ip = card ? card.dataset.ip : null;
+  if (!ip) return;
+  isDragging = true;
+  isInteractingWithCard = true;
+  currentDraggedIp = ip;
+  dragStartTime = Date.now();
+  ev.dataTransfer.effectAllowed = 'move';
+  try {
+    ev.dataTransfer.setData('text/plain', ip);
+  } catch (e) {}
+  if (card) card.classList.add('opacity-40');
+}
+
+function dragEnd(ev) {
+  isDragging = false;
+  isInteractingWithCard = false;
+  currentDraggedIp = null;
+  const card = ev.target.closest('[data-ip]');
+  if (card) card.classList.remove('opacity-40');
+  document.querySelectorAll('.room-drop-zone, #clients-pool').forEach((z) => {
+    z.classList.remove('bg-sky-50', 'ring-2', 'ring-sky-400');
+  });
+  updateUIWithData(globalClientsData);
 }
 
 function allowDrop(ev) {
   ev.preventDefault();
+  if (ev.dataTransfer) {
+    ev.dataTransfer.dropEffect = 'move';
+  }
+}
+
+function handleDragEnter(ev, el) {
+  ev.preventDefault();
+  if (el) {
+    el.classList.add('bg-sky-50', 'ring-2', 'ring-sky-400');
+  }
+}
+
+function handleDragLeave(ev, el) {
+  if (el && !el.contains(ev.relatedTarget)) {
+    el.classList.remove('bg-sky-50', 'ring-2', 'ring-sky-400');
+  }
 }
 
 function dropToRoom(ev, roomName) {
   ev.preventDefault();
-  assignClientToRoom(ev.dataTransfer.getData('text/plain'), roomName);
+  ev.stopPropagation();
+  isDragging = false;
+  isInteractingWithCard = false;
+  document.querySelectorAll('.room-drop-zone, #clients-pool').forEach((z) => {
+    z.classList.remove('bg-sky-50', 'ring-2', 'ring-sky-400');
+  });
+  const ip = currentDraggedIp || (ev.dataTransfer && ev.dataTransfer.getData('text/plain'));
+  currentDraggedIp = null;
+  if (ip && ip !== 'undefined') {
+    assignClientToRoom(ip, roomName);
+  }
 }
 
-function dropToPool(ev) {
+function dropToPool(ev, el) {
   ev.preventDefault();
-  assignClientToRoom(ev.dataTransfer.getData('text/plain'), 'Brak');
+  ev.stopPropagation();
+  isDragging = false;
+  isInteractingWithCard = false;
+  if (el) {
+    el.classList.remove('bg-sky-50', 'ring-2', 'ring-sky-400');
+  }
+  const ip = currentDraggedIp || (ev.dataTransfer && ev.dataTransfer.getData('text/plain'));
+  currentDraggedIp = null;
+  if (ip && ip !== 'undefined') {
+    assignClientToRoom(ip, 'Brak');
+  }
 }
 
 function assignClientToRoom(ip, room) {
   const client = globalClientsData.find((c) => c.ip === ip);
   if (client) {
-    const oldRoom = client.group;
     client.group = room;
     client.hand_raised = false;
     updateUIWithData(globalClientsData);
     clearHand(ip);
-    showToast(`Przeniesiono ${client.name} do ${room === 'Brak' ? 'Poczekalni' : room}`, 'success');
+    showToast(`Przeniesiono ${client.name} do: ${room === 'Brak' ? 'Poczekalni' : room}`, 'success');
   }
-  getTauri().invoke('assign_client_room', { ip, room }).catch(console.error);
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('assign_client_room', { ip, room }).catch(console.error);
+  }
 }
 
 async function initAdminCheck() {
@@ -349,22 +531,249 @@ async function handleFirewall() {
   }
 }
 
-async function initDashboardListener() {
-  const tauri = getTauri();
-  if (!tauri || !tauri.listen) {
-    setTimeout(initDashboardListener, 100);
-    return;
-  }
-  await tauri.listen('dashboard_update', (event) => {
-    const data = event.payload;
-    document.getElementById('mbps').innerText = data.mbps.toFixed(2) + ' Mbps';
-    document.getElementById('count').innerText = data.active_clients.length;
-    globalClientsData = data.active_clients;
-    updateUIWithData(globalClientsData);
-  });
+// --- ODTWARZACZ CZYTANKI / LEKCJI (LISTENING COMPREHENSION) ---
+let isMediaSeeking = false;
+
+function formatAudioTime(secs) {
+  if (isNaN(secs) || secs < 0) secs = 0;
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+async function handleMediaFileSelect(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  showToast(`Wczytywanie i dekodowanie: ${file.name}...`, 'info');
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(arrayBuffer));
+    const status = await tauri.invoke('media_load_bytes', { name: file.name, data: bytes });
+    updateMediaUI(status);
+    showToast(`Pomyślnie wczytano czytankę: ${file.name}`, 'success');
+  } catch (err) {
+    showToast(`Błąd wczytywania audio: ${err}`, 'warning');
+  } finally {
+    event.target.value = '';
+  }
+}
+
+async function toggleMediaPlay() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  const playBtn = document.getElementById('media-play-btn');
+  const isPlaying = playBtn?.dataset.playing === 'true';
+
+  try {
+    if (isPlaying) {
+      await tauri.invoke('media_pause');
+    } else {
+      await tauri.invoke('media_play');
+    }
+  } catch (err) {
+    showToast(err, 'warning');
+  }
+}
+
+async function stopMediaPlay() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    await tauri.invoke('media_stop');
+  } catch (err) {
+    showToast(err, 'warning');
+  }
+}
+
+function handleMediaSeekInput(value) {
+  isMediaSeeking = true;
+  const seekSlider = document.getElementById('media-seek-slider');
+  const duration = parseFloat(seekSlider?.dataset.duration || '0');
+  const curSecs = (parseFloat(value) / 100) * duration;
+  const timeDisplay = document.getElementById('media-track-time');
+  if (timeDisplay) {
+    timeDisplay.innerText = `${formatAudioTime(curSecs)} / ${formatAudioTime(duration)}`;
+  }
+}
+
+async function handleMediaSeekChange(value) {
+  isMediaSeeking = false;
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  const seekSlider = document.getElementById('media-seek-slider');
+  const duration = parseFloat(seekSlider?.dataset.duration || '0');
+  const curSecs = (parseFloat(value) / 100) * duration;
+
+  try {
+    await tauri.invoke('media_seek', { positionSecs: curSecs });
+  } catch (err) {
+    showToast(err, 'warning');
+  }
+}
+
+async function handleMediaVolume(value) {
+  const vol = parseFloat(value) / 100.0;
+  document.getElementById('media-volume-text').innerText = `${Math.round(value)}%`;
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('media_set_volume', { volume: vol }).catch(console.error);
+  }
+}
+
+async function handleMediaTargetChange(target) {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('media_set_target', { target }).catch(console.error);
+    showToast(`Odbiorcy czytanki: ${target === 'all' ? 'Cała klasa' : target}`, 'info');
+  }
+}
+
+function updateMediaUI(status) {
+  if (!status) return;
+
+  const titleElem = document.getElementById('media-track-title');
+  const timeElem = document.getElementById('media-track-time');
+  const playBtn = document.getElementById('media-play-btn');
+  const stopBtn = document.getElementById('media-stop-btn');
+  const seekSlider = document.getElementById('media-seek-slider');
+  const playIcon = document.getElementById('media-play-icon');
+
+  if (titleElem) {
+    titleElem.innerText = status.file_name ? `🎧 ${status.file_name}` : 'Brak wczytanego nagrania';
+  }
+
+  if (timeElem) {
+    timeElem.innerText = `${formatAudioTime(status.current_time_secs)} / ${formatAudioTime(status.total_duration_secs)}`;
+  }
+
+  if (playBtn) {
+    playBtn.disabled = !status.is_loaded;
+    playBtn.dataset.playing = status.is_playing ? 'true' : 'false';
+  }
+
+  if (stopBtn) {
+    stopBtn.disabled = !status.is_loaded;
+  }
+
+  if (seekSlider) {
+    seekSlider.disabled = !status.is_loaded;
+    seekSlider.dataset.duration = status.total_duration_secs.toString();
+    if (!isMediaSeeking && status.total_duration_secs > 0) {
+      const pct = (status.current_time_secs / status.total_duration_secs) * 100;
+      seekSlider.value = pct;
+    }
+  }
+
+  if (playIcon) {
+    if (status.is_playing) {
+      // Pause icon
+      playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+      playBtn?.classList.replace('bg-emerald-600', 'bg-amber-600');
+      playBtn?.classList.replace('hover:bg-emerald-500', 'hover:bg-amber-500');
+    } else {
+      // Play icon
+      playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
+      playBtn?.classList.replace('bg-amber-600', 'bg-emerald-600');
+      playBtn?.classList.replace('hover:bg-amber-500', 'hover:bg-emerald-500');
+    }
+  }
+}
+
+function updateMediaTargetSelect() {
+  const sel = document.getElementById('media-target-select');
+  if (!sel) return;
+  const currentVal = sel.value || 'all';
+
+  let opts = '<option value="all">📢 Cała klasa (Wszyscy)</option>';
+  roomsList.forEach((r) => {
+    opts += `<option value="${r}">${r}</option>`;
+  });
+  sel.innerHTML = opts;
+  sel.value = currentVal;
+}
+
+let dashboardListenerInitialized = false;
+
+function applyDashboardData(data) {
+  if (!data) return;
+  const mbpsElem = document.getElementById('mbps');
+  if (mbpsElem && data.mbps !== undefined) {
+    mbpsElem.innerText = data.mbps.toFixed(2) + ' Mbps';
+  }
+  const countElem = document.getElementById('count');
+  if (countElem && data.active_clients) {
+    countElem.innerText = data.active_clients.length;
+  }
+  globalClientsData = data.active_clients || [];
+
+  // Watchdog: jeśli drag wisiał za długo, zresetuj
+  if (isDragging && (Date.now() - dragStartTime > 4000)) {
+    isDragging = false;
+    isInteractingWithCard = false;
+    currentDraggedIp = null;
+  }
+
+  updateUIWithData(globalClientsData);
+  if (data.media_status) {
+    updateMediaUI(data.media_status);
+  }
+}
+
+async function initDashboardListener() {
+  if (dashboardListenerInitialized) return;
+  dashboardListenerInitialized = true;
+  const tauri = getTauri();
+
+  // 1. Zdarzenie czasu rzeczywistego (push)
+  if (tauri && tauri.listen) {
+    try {
+      await tauri.listen('request_close', () => {
+        openExitModal();
+      });
+
+      await tauri.listen('dashboard_update', (event) => {
+        applyDashboardData(event.payload);
+      });
+    } catch (err) {
+      console.error('Błąd rejestracji listenera dashboard_update:', err);
+    }
+  }
+
+  // 2. Cykliczne odpytywanie stanu (pull fallback) - gwarancja odświeżania
+  setInterval(async () => {
+    if (isDragging || isInteractingWithCard) return;
+    const t = getTauri();
+    if (t && t.invoke) {
+      try {
+        const data = await t.invoke('get_dashboard_data');
+        if (data) {
+          applyDashboardData(data);
+        }
+      } catch (e) {}
+    }
+  }, 500);
+}
+
+let lastRenderedClientsHash = '';
+
 function updateUIWithData(clients) {
+  if (isDragging || isInteractingWithCard) return;
+
+  const currentHash = JSON.stringify(
+    clients.map((c) => [c.ip, c.name, c.group, c.hand_raised, c.is_speaking, c.ping_ms, c.loss_pct, c.quality])
+  );
+  if (currentHash === lastRenderedClientsHash) {
+    return;
+  }
+  lastRenderedClientsHash = currentHash;
+
   const roomZones = document.querySelectorAll('.room-drop-zone');
   roomZones.forEach((z) => (z.innerHTML = ''));
 
@@ -374,49 +783,100 @@ function updateUIWithData(clients) {
   clients.forEach((client) => {
     const h = client.hand_raised;
     const s = client.is_speaking;
+    const ping = client.ping_ms || 0;
+    const loss = client.loss_pct || 0;
+    const q = client.quality || 'excellent';
+
+    let pingBadgeClass = 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    let dotClass = 'bg-emerald-500';
+    let statusText = 'Połączenie stabilne';
+
+    if (q === 'poor') {
+      pingBadgeClass = 'text-red-700 bg-red-50 border-red-300 animate-pulse';
+      dotClass = 'bg-red-500';
+      statusText = 'Słaba jakość sieci (duże opóźnienie/utrata pakietów)';
+    } else if (q === 'fair') {
+      pingBadgeClass = 'text-amber-700 bg-amber-50 border-amber-300';
+      dotClass = 'bg-amber-500';
+      statusText = 'Średnia jakość sieci';
+    } else if (q === 'good') {
+      pingBadgeClass = 'text-sky-700 bg-sky-50 border-sky-300';
+      dotClass = 'bg-sky-500';
+      statusText = 'Dobra jakość sieci';
+    }
+
+    const networkBadge = `
+      <div class="flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-mono font-bold ${pingBadgeClass} flex-shrink-0"
+           title="Jakość połączenia: ${statusText}&#10;Ping: ${ping} ms&#10;Utrata pakietów: ${loss}%">
+        <span class="w-1.5 h-1.5 rounded-full ${dotClass}"></span>
+        <span>${ping} ms</span>
+        ${loss > 0 ? `<span class="opacity-80">(${loss}%)</span>` : ''}
+      </div>
+    `;
 
     const bgRow = h
-      ? 'bg-amber-50/90 border-amber-300 shadow-md ring-2 ring-amber-200'
-      : 'bg-white hover:bg-slate-50 border-slate-200/80 hover:border-slate-300 shadow-sm';
+      ? 'bg-amber-50 border-amber-300 shadow-sm ring-1 ring-amber-300'
+      : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm';
 
     const avatarGlow = s
-      ? 'border-[#16a34a] shadow-[0_0_12px_rgba(22,163,74,0.8)] scale-105'
-      : 'border-slate-200 shadow-inner';
+      ? 'border-[#16a34a] bg-emerald-50 text-emerald-600 ring-2 ring-emerald-400'
+      : 'border-slate-200 bg-slate-100 text-slate-400';
+
+    let roomOptions = `<option value="Brak"${client.group === 'Brak' ? ' selected' : ''}>Poczekalnia</option>`;
+    roomsList.forEach((r) => {
+      roomOptions += `<option value="${r}"${client.group === r ? ' selected' : ''}>${r}</option>`;
+    });
+
+    const roomSelect = `
+      <select onchange="assignClientToRoom('${client.ip}', this.value)"
+              onmousedown="event.stopPropagation()"
+              class="text-[10px] bg-slate-50 hover:bg-white border border-slate-300 hover:border-[#1e3a5f] rounded-lg px-1.5 py-0.5 font-bold text-[#1e3a5f] cursor-pointer focus:outline-none shadow-xs"
+              title="Szybka zmiana pokoju dla tego ucznia">
+        ${roomOptions}
+      </select>
+    `;
 
     const cardHtml = `
-      <div draggable="true" ondragstart="drag(event)" data-ip="${client.ip}"
-           class="group flex items-center p-2.5 rounded-xl cursor-grab active:cursor-grabbing transition-all duration-150 border transform hover:-translate-y-0.5 ${bgRow}">
+      <div draggable="true" onmousedown="handleCardMouseDown(event)" ondragstart="drag(event)" ondragend="dragEnd(event)" data-ip="${client.ip}"
+           class="group flex items-center p-2 rounded-xl cursor-grab active:cursor-grabbing transition border ${bgRow}">
         
-        <!-- UCHWYT DRAG INDICATOR (6 KROPEK) -->
-        <svg class="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-500 mr-2 flex-shrink-0 fill-current transition-colors" viewBox="0 0 24 24">
+        <!-- DRAG HANDLE -->
+        <svg class="w-3 h-3 text-slate-300 group-hover:text-slate-500 mr-1.5 flex-shrink-0 fill-current pointer-events-none" viewBox="0 0 24 24">
           <path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
         </svg>
 
         <!-- AWATAR ZE WSKAŹNIKIEM MOWY -->
-        <div class="relative w-9 h-9 bg-slate-100 rounded-xl mr-3 flex items-center justify-center transition-all duration-150 border ${avatarGlow}">
-          <svg class="w-5 h-5 ${s ? 'text-[#16a34a]' : 'text-slate-400'} fill-current transition-colors" viewBox="0 0 24 24">
+        <div class="relative w-7 h-7 rounded-lg mr-2 flex items-center justify-center transition border ${avatarGlow} pointer-events-none">
+          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24">
             <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
           </svg>
-          <div class="absolute -bottom-1 -right-1 w-3 h-3 ${s ? 'bg-[#16a34a] animate-pulse' : 'bg-emerald-500'} rounded-full border-2 border-white shadow-sm"></div>
+          <div class="absolute -bottom-0.5 -right-0.5 w-2 h-2 ${s ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'} rounded-full border border-white"></div>
         </div>
         
-        <!-- DANE UCZNIA -->
-        <div class="flex-1 overflow-hidden">
-          <div class="font-bold text-[13px] text-slate-800 truncate leading-tight">${client.name}</div>
-          <div class="text-[11px] ${h ? 'text-amber-600 font-bold animate-pulse' : s ? 'text-[#16a34a] font-bold' : 'text-slate-500'} truncate mt-0.5">
-            ${h ? '✋ Zgłasza się po pomoc!' : s ? 'Mówi w pokoju...' : client.group !== 'Brak' ? 'W grupie' : client.ip}
+        <!-- DANE UCZNIA + DIAGNOSTYKA SIECI -->
+        <div class="flex-1 overflow-hidden min-w-0 pr-1 pointer-events-none">
+          <div class="flex items-center justify-between gap-1">
+            <span class="font-bold text-xs text-slate-800 truncate leading-tight">${client.name}</span>
+            ${networkBadge}
+          </div>
+          <div class="text-[10px] ${h ? 'text-amber-700 font-bold' : s ? 'text-emerald-600 font-bold' : 'text-slate-400'} truncate mt-0.5">
+            ${h ? '✋ Zgłasza się po pomoc!' : s ? 'Mówi w pokoju...' : client.group !== 'Brak' ? client.group : 'Poczekalnia'}
           </div>
         </div>
 
-        ${
-          h
-            ? `
-          <button onclick="clearHand('${client.ip}')" class="p-1.5 ml-2 rounded-lg bg-amber-200/80 hover:bg-amber-300 text-amber-800 transition active:scale-95 cursor-pointer" title="Odznacz pomoc">
-            <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
-          </button>
-        `
-            : ''
-        }
+        <!-- SZYBKI WYBÓR POKOJU (ALTERNATYWA DLA DRAG&DROP) -->
+        <div class="ml-1 flex-shrink-0 flex items-center gap-1">
+          ${roomSelect}
+          ${
+            h
+              ? `
+            <button onclick="clearHand('${client.ip}')" class="p-1 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-900 transition active:scale-95 cursor-pointer flex-shrink-0" title="Odznacz pomoc">
+              <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
+            </button>
+          `
+              : ''
+          }
+        </div>
       </div>
     `;
 
@@ -433,9 +893,9 @@ function updateUIWithData(clients) {
   roomZones.forEach((z) => {
     if (!z.innerHTML.trim()) {
       z.innerHTML = `
-        <div class="h-full border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-4 text-center text-slate-400 select-none">
-          <svg class="w-6 h-6 text-slate-300 mb-1.5 fill-current" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-          <span class="text-xs font-medium text-slate-400">Przeciągnij uczniów tutaj</span>
+        <div class="h-full border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-3 text-center text-slate-400 select-none pointer-events-none">
+          <svg class="w-5 h-5 text-slate-300 mb-1 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          <span class="text-[11px] text-slate-400 pointer-events-none">Przeciągnij uczniów tutaj</span>
         </div>
       `;
     }
@@ -447,18 +907,72 @@ function updateUIWithData(clients) {
   document.getElementById('clients-pool').innerHTML =
     poolHtml ||
     `
-    <div class="h-48 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center p-6 text-center text-slate-400 select-none">
-      <svg class="w-8 h-8 text-slate-300 mb-2 fill-current" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-      <span class="text-xs font-semibold text-slate-500">Poczekalnia jest pusta</span>
-      <span class="text-[11px] text-slate-400 mt-1">Uczniowie pojawią się po włączeniu aplikacji</span>
+    <div class="h-40 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-4 text-center text-slate-400 select-none pointer-events-none">
+      <svg class="w-6 h-6 text-slate-300 mb-1.5 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+      </svg>
+      <span class="text-xs font-semibold text-slate-500 pointer-events-none">Poczekalnia jest pusta</span>
+      <span class="text-[10px] text-slate-400 mt-0.5 pointer-events-none">Uczniowie pojawią się po połączeniu</span>
     </div>
   `;
 }
 
 // -------------------------------------------------------------
-// SYSTEM AKTUALIZACJI APLIKACJI (FTP / HTTP)
+// POWIADOMIENIA TOAST (FLOATING ALERTS)
 // -------------------------------------------------------------
-let pendingUpdateInfo = null;
+function showToast(message, type = 'info') {
+  let toastContainer = document.getElementById('global-toast-container');
+  if (!toastContainer) {
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'global-toast-container';
+    toastContainer.className = 'fixed bottom-5 right-5 z-50 flex flex-col-reverse gap-2 max-w-sm pointer-events-none select-none';
+    document.body.appendChild(toastContainer);
+  }
+
+  const toast = document.createElement('div');
+  let bgClass = 'bg-slate-900/95 border-slate-700 text-white';
+  let icon = '🚀';
+
+  if (type === 'success') {
+    bgClass = 'bg-emerald-950/95 border-emerald-500/60 text-emerald-100 shadow-emerald-950/50';
+    icon = '✅';
+  } else if (type === 'warning') {
+    bgClass = 'bg-amber-950/95 border-amber-500/60 text-amber-100 shadow-amber-950/50';
+    icon = '⚠️';
+  } else if (type === 'error') {
+    bgClass = 'bg-red-950/95 border-red-500/60 text-red-100 shadow-red-950/50';
+    icon = '❌';
+  } else if (type === 'info') {
+    bgClass = 'bg-sky-950/95 border-sky-500/60 text-sky-100 shadow-sky-950/50';
+    icon = 'ℹ️';
+  }
+
+  toast.className = `flex items-center gap-2.5 px-4 py-3 rounded-2xl border shadow-xl backdrop-blur-md text-xs font-semibold transform transition-all duration-300 pointer-events-auto opacity-0 translate-y-3 ${bgClass}`;
+  toast.innerHTML = `
+    <span class="text-sm flex-shrink-0">${icon}</span>
+    <span class="flex-1">${message}</span>
+  `;
+
+  toastContainer.appendChild(toast);
+
+  // Animate in
+  requestAnimationFrame(() => {
+    toast.classList.remove('opacity-0', 'translate-y-3');
+  });
+
+  // Auto remove after 4s
+  setTimeout(() => {
+    toast.classList.add('opacity-0', 'translate-y-3');
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, 4000);
+}
+
+// -------------------------------------------------------------
+// SYSTEM AKTUALIZACJI APLIKACJI (OFICJALNY TAURI UPDATER)
+// -------------------------------------------------------------
+let pendingTauriUpdate = null;
+let isUpdatingApp = false;
 
 async function initAppVersion() {
   const tauri = getTauri();
@@ -466,172 +980,94 @@ async function initAppVersion() {
   try {
     const version = await tauri.invoke('get_app_version');
     const badge = document.getElementById('header-version-badge');
-    const modalV = document.getElementById('update-modal-current-v');
     if (badge) badge.innerText = `v${version}`;
-    if (modalV) modalV.innerText = `v${version}`;
   } catch (err) {
     console.error('Błąd pobierania wersji aplikacji:', err);
   }
 }
 
-function openUpdateModal() {
-  const modal = document.getElementById('update-modal');
-  const input = document.getElementById('update-server-url-input');
-  const savedUrl = localStorage.getItem('voip_update_url') || '';
-  if (input && !input.value) {
-    input.value = savedUrl;
-  }
-  modal?.classList.remove('hidden');
-}
-
-function closeUpdateModal() {
-  document.getElementById('update-modal')?.classList.add('hidden');
-}
-
-async function checkForUpdates(manual = false) {
+async function checkForAppUpdate(manual = false) {
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
 
-  const input = document.getElementById('update-server-url-input');
-  const updateUrl = (input?.value || '').trim() || localStorage.getItem('voip_update_url');
-
-  if (!updateUrl) {
-    if (manual) showToast('Wpisz adres serwera aktualizacji FTP lub HTTP (np. http://.../version.json)', 'warning');
-    return;
-  }
-
-  localStorage.setItem('voip_update_url', updateUrl);
-
-  const btnCheck = document.getElementById('btn-check-updates');
-  const statusBox = document.getElementById('update-status-box');
-  const alertBanner = document.getElementById('update-alert-banner');
-  const changelogBox = document.getElementById('update-changelog-box');
-  const changelogText = document.getElementById('update-changelog-text');
-  const btnInstall = document.getElementById('btn-install-update');
-
-  if (btnCheck) {
-    btnCheck.disabled = true;
-    btnCheck.innerText = 'Sprawdzanie...';
+  if (manual) {
+    showToast('Sprawdzanie dostępności nowej wersji...', 'info');
   }
 
   try {
-    const info = await tauri.invoke('check_for_updates', { updateUrl });
-    pendingUpdateInfo = info;
-
-    if (statusBox) statusBox.classList.remove('hidden');
-
-    if (info.has_update) {
-      if (alertBanner) {
-        alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-emerald-50 border-emerald-300 text-emerald-900';
-        alertBanner.innerHTML = `
-          <div class="flex items-center gap-2 font-bold text-xs">
-            <span class="w-2.5 h-2.5 rounded-full bg-[#16a34a] animate-ping"></span>
-            <span>Dostępna nowa wersja: <b>v${info.latest_version}</b></span>
-          </div>
-          <div class="text-[11px] text-emerald-700 mt-1">
-            Data wydania: ${info.release_date || 'Najnowsza'}
-          </div>
-        `;
-      }
-
-      if (info.changelog && changelogBox && changelogText) {
-        changelogText.innerText = info.changelog;
-        changelogBox.classList.remove('hidden');
-      }
-
-      if (btnInstall) {
-        btnInstall.classList.remove('hidden');
-        btnInstall.disabled = false;
-        btnInstall.innerHTML = `
-          <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-          <span>Zainstaluj i zrestartuj teraz (v${info.latest_version})</span>
-        `;
-      }
-
-      showToast(`Dostępna nowa wersja serwera: v${info.latest_version}!`, 'info');
-      if (!manual) openUpdateModal();
+    const res = await tauri.invoke('check_for_updates');
+    if (res && res.available) {
+      pendingTauriUpdate = res;
+      showUpdateToast(res.latest_version, res.body);
+      showToast(`Dostępna nowa wersja serwera: v${res.latest_version}!`, 'info');
     } else {
-      if (alertBanner) {
-        alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-slate-100 border-slate-300 text-slate-700';
-        alertBanner.innerHTML = `
-          <div class="font-bold text-xs flex items-center gap-1.5">
-            <svg class="w-4 h-4 text-[#16a34a] fill-current" viewBox="0 0 24 24"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>
-            <span>Posiadasz najnowszą wersję programu (v${info.current_version}).</span>
-          </div>
-        `;
+      if (manual) {
+        const curVer = res ? res.current_version : await tauri.invoke('get_app_version');
+        showToast(`Posiadasz najnowszą wersję programu (v${curVer}).`, 'success');
       }
-      changelogBox?.classList.add('hidden');
-      btnInstall?.classList.add('hidden');
-      if (manual) showToast('Aplikacja jest aktualna!', 'success');
     }
   } catch (err) {
-    console.error('Błąd sprawdzania aktualizacji:', err);
-    if (statusBox) statusBox.classList.remove('hidden');
-    if (alertBanner) {
-      alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-red-50 border-red-200 text-red-700';
-      alertBanner.innerText = `Błąd: ${err}`;
-    }
-    if (manual) showToast(`Błąd aktualizacji: ${err}`, 'warning');
-  } finally {
-    if (btnCheck) {
-      btnCheck.disabled = false;
-      btnCheck.innerText = 'Sprawdź';
+    console.warn('Sprawdzanie aktualizacji w tle:', err);
+    if (manual) {
+      const curVer = await tauri.invoke('get_app_version').catch(() => '1.0.0');
+      showToast(`Aktualna wersja: v${curVer} (Brak połączenia z serwerem aktualizacji GitHub)`, 'warning');
     }
   }
 }
 
-async function applyUpdateNow() {
-  if (!pendingUpdateInfo || !pendingUpdateInfo.download_url) {
-    showToast('Brak adresu pliku aktualizacji!', 'warning');
-    return;
+function showUpdateToast(version, changelog) {
+  const toast = document.getElementById('update-notification-toast');
+  const text = document.getElementById('update-toast-text');
+  if (text) {
+    text.innerText = `Dostępna jest wersja v${version}.${changelog ? ' ' + changelog.slice(0, 100) : ''}`;
   }
+  toast?.classList.remove('hidden');
+}
 
-  const btnInstall = document.getElementById('btn-install-update');
-  const btnClose = document.getElementById('btn-close-update');
-  const alertBanner = document.getElementById('update-alert-banner');
+function dismissUpdateToast() {
+  document.getElementById('update-notification-toast')?.classList.add('hidden');
+}
 
-  if (btnInstall) {
-    btnInstall.disabled = true;
-    btnInstall.innerHTML = `
-      <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+async function applyTauriUpdate() {
+  if (isUpdatingApp) return;
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+
+  const btn = document.getElementById('btn-install-tauri-update');
+  isUpdatingApp = true;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `
+      <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
         <circle cx="12" cy="12" r="10" stroke-width="4" class="opacity-25"></circle>
         <path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path>
       </svg>
-      <span>Pobieranie i restartowanie...</span>
+      <span>Pobieranie i restart...</span>
     `;
-  }
-  if (btnClose) btnClose.disabled = true;
-
-  if (alertBanner) {
-    alertBanner.className = 'p-3.5 rounded-2xl border mb-3 bg-sky-50 border-sky-300 text-sky-900';
-    alertBanner.innerText = 'Pobieranie nowej wersji z serwera FTP/HTTP. Program zamknie się i zaktualizuje za chwilę...';
   }
 
   try {
-    const tauri = getTauri();
-    const res = await tauri.invoke('install_update', { downloadUrl: pendingUpdateInfo.download_url });
-    showToast(res, 'success');
-    setTimeout(() => {
-      // Zamknięcie aplikacji w celu umożliwienia podmiany pliku
-      window.close();
-    }, 1500);
+    await tauri.invoke('install_update');
   } catch (err) {
     console.error('Błąd instalacji aktualizacji:', err);
-    showToast(`Błąd instalacji: ${err}`, 'warning');
-    if (btnInstall) {
-      btnInstall.disabled = false;
-      btnInstall.innerText = 'Spróbuj ponownie';
+    showToast(`Błąd aktualizacji: ${err}`, 'warning');
+    isUpdatingApp = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerText = 'Spróbuj ponownie';
     }
-    if (btnClose) btnClose.disabled = false;
   }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
   checkActivationStatus();
+  initDashboardListener();
   initAppVersion();
-  // Sprawdź aktualizacje po 3 sekundach od startu jeśli jest zapisany URL
+  // Sprawdź aktualizacje automatycznie w tle po 3 sekundach od startu programu
   setTimeout(() => {
-    const savedUrl = localStorage.getItem('voip_update_url');
-    if (savedUrl) checkForUpdates(false);
+    checkForAppUpdate(false);
   }, 3000);
 });
+
+

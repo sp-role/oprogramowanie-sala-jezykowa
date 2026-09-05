@@ -116,51 +116,91 @@ fn run_elevated_windows(cmd: &str, params: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn apply_firewall_rules_internal() -> bool {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP Audio"])
+            .output();
+        let _ = Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP Discovery"])
+            .output();
+        let _ = Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP Ping ICMP"])
+            .output();
+        let _ = Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP mDNS"])
+            .output();
+
+        let out_audio = Command::new("netsh")
+            .args([
+                "advfirewall", "firewall", "add", "rule",
+                "name=Serwer VoIP Audio", "dir=in", "action=allow",
+                "protocol=UDP", &format!("localport={}", PORT_AUDIO),
+                "profile=any", "enable=yes",
+            ])
+            .output();
+
+        let out_disc = Command::new("netsh")
+            .args([
+                "advfirewall", "firewall", "add", "rule",
+                "name=Serwer VoIP Discovery", "dir=in", "action=allow",
+                "protocol=UDP", &format!("localport={}", PORT_DISCOVERY),
+                "profile=any", "enable=yes",
+            ])
+            .output();
+
+        let _ = Command::new("netsh")
+            .args([
+                "advfirewall", "firewall", "add", "rule",
+                "name=Serwer VoIP Ping ICMP", "dir=in", "action=allow",
+                "protocol=icmpv4:8,any", "profile=any", "enable=yes",
+            ])
+            .output();
+
+        let _ = Command::new("netsh")
+            .args([
+                "advfirewall", "firewall", "add", "rule",
+                "name=Serwer VoIP mDNS", "dir=in", "action=allow",
+                "protocol=UDP", "localport=5353", "profile=any", "enable=yes",
+            ])
+            .output();
+
+        // Przełączenie sieci na profil prywatny
+        let _ = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private -ErrorAction SilentlyContinue",
+            ])
+            .output();
+
+        let audio_ok = out_audio.map(|o| o.status.success()).unwrap_or(false);
+        let disc_ok = out_disc.map(|o| o.status.success()).unwrap_or(false);
+        audio_ok && disc_ok
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 #[tauri::command]
 pub fn add_firewall_rule() -> Result<String, String> {
     #[cfg(windows)]
     {
         if is_elevated() {
-            let _ = Command::new("netsh")
-                .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP Audio"])
-                .output();
-            let _ = Command::new("netsh")
-                .args(["advfirewall", "firewall", "delete", "rule", "name=Serwer VoIP Discovery"])
-                .output();
-
-            let out_audio = Command::new("netsh")
-                .args([
-                    "advfirewall", "firewall", "add", "rule",
-                    "name=Serwer VoIP Audio", "dir=in", "action=allow",
-                    "protocol=UDP", &format!("localport={}", PORT_AUDIO),
-                    "enable=yes",
-                ])
-                .output()
-                .map_err(|e| format!("Błąd wykonywania netsh: {}", e))?;
-
-            let out_disc = Command::new("netsh")
-                .args([
-                    "advfirewall", "firewall", "add", "rule",
-                    "name=Serwer VoIP Discovery", "dir=in", "action=allow",
-                    "protocol=UDP", &format!("localport={}", PORT_DISCOVERY),
-                    "enable=yes",
-                ])
-                .output()
-                .map_err(|e| format!("Błąd wykonywania netsh: {}", e))?;
-
-            if out_audio.status.success() && out_disc.status.success() {
+            if apply_firewall_rules_internal() {
                 Ok("Dodano trwałe wyjątki portów (5005, 5006 UDP) do Zapory Windows!".to_string())
             } else {
                 Err("Nie udało się dodać reguł do zapory.".to_string())
             }
         } else {
-            // Brak uprawnień administratora - wywołaj systemowy modal UAC (wpisanie hasła admina / zgoda)
-            let params = format!(
-                "/c netsh advfirewall firewall delete rule name=\"Serwer VoIP Audio\" & netsh advfirewall firewall delete rule name=\"Serwer VoIP Discovery\" & netsh advfirewall firewall add rule name=\"Serwer VoIP Audio\" dir=in action=allow protocol=UDP localport={} enable=yes & netsh advfirewall firewall add rule name=\"Serwer VoIP Discovery\" dir=in action=allow protocol=UDP localport={} enable=yes",
-                PORT_AUDIO, PORT_DISCOVERY
-            );
+            // Brak uprawnień administratora - uruchom tę samą aplikację serwera jako administrator z flagą konfiguracyjną (w oknie UAC pojawi się nazwa aplikacji)
+            let current_exe = std::env::current_exe()
+                .map_err(|e| format!("Błąd lokalizacji pliku programu: {}", e))?;
 
-            run_elevated_windows("cmd.exe", &params)?;
+            run_elevated_windows(current_exe.to_str().unwrap(), "--configure-firewall")?;
             Ok("Pomyślnie dodano wyjątki do Zapory Windows z uprawnieniami administratora!".to_string())
         }
     }
@@ -183,15 +223,112 @@ pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServe
         st.groups.entry(room.clone()).or_insert_with(Vec::new).push(ip.clone());
     }
     st.ip_to_group.insert(ip.clone(), room.clone());
+    println!("[SERWER] Przypisano klienta {} do pokoju: '{}'", ip, room);
 
-    if let Some(target_addr) = st.ip_to_addr.get(&ip) {
-        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            let msg = format!("VOIP_ROOM:{}", room);
-            let _ = socket.send_to(msg.as_bytes(), target_addr);
+    if let Some(target_addr) = st.ip_to_addr.get(&ip).cloned() {
+        let msg = format!("VOIP_ROOM:{}", room);
+        if let Some(ref sock) = st.audio_socket {
+            for _ in 0..5 {
+                let _ = sock.send_to(msg.as_bytes(), target_addr);
+            }
+        } else if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            for _ in 0..5 {
+                let _ = socket.send_to(msg.as_bytes(), target_addr);
+            }
         }
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn reset_all_to_pool(state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let mut st = state.lock().unwrap();
+    st.groups.clear();
+    let ips: Vec<String> = st.client_stats.keys().cloned().collect();
+    for ip in &ips {
+        st.ip_to_group.insert(ip.clone(), "Brak".to_string());
+        if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
+            let msg = b"VOIP_ROOM:Brak";
+            if let Some(ref sock) = st.audio_socket {
+                for _ in 0..3 {
+                    let _ = sock.send_to(msg, target_addr);
+                }
+            }
+        }
+    }
+    println!("[SERWER] Zresetowano wszystkich uczniów ({}) do Poczekalni", ips.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn auto_pair_clients(mut rooms: Vec<String>, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let now = crate::state::current_time();
+    let mut st = state.lock().unwrap();
+
+    // Pobierz aktywnych klientów
+    let mut active_ips: Vec<String> = st
+        .client_stats
+        .iter()
+        .filter(|(_, data)| now - data.last_seen < crate::state::CLIENT_TIMEOUT_SECS)
+        .map(|(ip, _)| ip.clone())
+        .collect();
+
+    if active_ips.is_empty() {
+        return Err("Brak połączonych uczniów do rozlosowania w pary.".to_string());
+    }
+
+    // Losowe przetasowanie metodą Fisher-Yates (prosty generator pseudo-losowy Xorshift)
+    let mut rng_state = (crate::state::current_time() * 1_000_000.0) as u64 ^ 0x5DEECE66D;
+    let len = active_ips.len();
+    for i in (1..len).rev() {
+        rng_state ^= rng_state << 13;
+        rng_state ^= rng_state >> 7;
+        rng_state ^= rng_state << 17;
+        let j = (rng_state as usize) % (i + 1);
+        active_ips.swap(i, j);
+    }
+
+    // Jeśli lista pokoi jest pusta, utwórz odpowiednią liczbę
+    if rooms.is_empty() {
+        let needed_rooms = (len + 1) / 2;
+        for i in 1..=needed_rooms.max(1) {
+            rooms.push(format!("Pokój {}", i));
+        }
+    }
+
+    // Wyczyść dotychczasowe przypisania
+    st.groups.clear();
+
+    // Przypisz uczniów parami do kolejnych pokoi
+    let num_rooms = rooms.len();
+    for (idx, ip) in active_ips.iter().enumerate() {
+        let room_idx = (idx / 2).min(num_rooms - 1);
+        let room_name = rooms[room_idx].clone();
+
+        st.groups.entry(room_name.clone()).or_insert_with(Vec::new).push(ip.clone());
+        st.ip_to_group.insert(ip.clone(), room_name.clone());
+
+        // Wyślij powiadomienie UDP do ucznia
+        if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
+            let msg = format!("VOIP_ROOM:{}", room_name);
+            if let Some(ref sock) = st.audio_socket {
+                for _ in 0..3 {
+                    let _ = sock.send_to(msg.as_bytes(), target_addr);
+                }
+            }
+        }
+    }
+
+    println!("[SERWER] Rozlosowano {} uczniów do {} pokoi", active_ips.len(), num_rooms);
+    Ok(())
+}
+
 
 #[tauri::command]
 pub fn set_broadcast(active: bool, state: State<'_, SharedServerState>) -> Result<(), String> {
@@ -245,13 +382,13 @@ pub fn get_app_version() -> String {
 }
 
 #[tauri::command]
-pub fn check_for_updates(update_url: String) -> Result<crate::updater::UpdateInfo, String> {
-    crate::updater::fetch_update_manifest(&update_url, "server")
+pub async fn check_for_updates(app: tauri::AppHandle) -> Result<crate::updater::UpdateCheckResult, String> {
+    crate::updater::check_update(&app).await
 }
 
 #[tauri::command]
-pub fn install_update(download_url: String) -> Result<String, String> {
-    crate::updater::download_and_install_update(&download_url)
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    crate::updater::install_latest_update(&app).await
 }
 
 #[tauri::command]
@@ -277,5 +414,217 @@ pub fn window_toggle_maximize(window: tauri::Window) {
 
 #[tauri::command]
 pub fn window_close(window: tauri::Window) {
-    let _ = window.close();
+    let _ = window.destroy();
+}
+
+#[tauri::command]
+pub fn report_frontend_error(message: String, stack: Option<String>) {
+    crate::telemetry::capture_error(&message, stack.as_deref());
+}
+
+#[tauri::command]
+pub fn media_load_bytes(
+    name: String,
+    data: Vec<u8>,
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> Result<crate::state::MediaPlaybackStatus, String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let (samples, duration) = crate::audio::decode_audio_bytes(&data)?;
+    let mut p = player.lock().unwrap();
+    p.file_name = name;
+    p.samples = samples;
+    p.duration_secs = duration;
+    p.current_sample_idx = 0;
+    p.is_playing = false;
+
+    Ok(crate::audio::get_media_status(&player.inner().clone()))
+}
+
+#[tauri::command]
+pub fn media_load_path(
+    path: String,
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> Result<crate::state::MediaPlaybackStatus, String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("Błąd odczytu pliku {}: {}", path, e))?;
+    let path_obj = std::path::Path::new(&path);
+    let name = path_obj
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Nagranie")
+        .to_string();
+
+    let (samples, duration) = crate::audio::decode_audio_bytes(&bytes)?;
+    let mut p = player.lock().unwrap();
+    p.file_name = name;
+    p.samples = samples;
+    p.duration_secs = duration;
+    p.current_sample_idx = 0;
+    p.is_playing = false;
+
+    Ok(crate::audio::get_media_status(&player.inner().clone()))
+}
+
+#[tauri::command]
+pub fn media_play(player: State<'_, crate::state::SharedMediaPlayer>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let mut p = player.lock().unwrap();
+    if p.samples.is_empty() {
+        return Err("Brak wczytanego pliku audio do odtworzenia.".to_string());
+    }
+    p.is_playing = true;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_pause(player: State<'_, crate::state::SharedMediaPlayer>) -> Result<(), String> {
+    let mut p = player.lock().unwrap();
+    p.is_playing = false;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_stop(player: State<'_, crate::state::SharedMediaPlayer>) -> Result<(), String> {
+    let mut p = player.lock().unwrap();
+    p.is_playing = false;
+    p.current_sample_idx = 0;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_seek(
+    position_secs: f64,
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> Result<(), String> {
+    let mut p = player.lock().unwrap();
+    let target_idx = (position_secs * crate::state::SAMPLE_RATE as f64).round() as usize;
+    p.current_sample_idx = target_idx.min(p.samples.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_set_volume(
+    volume: f32,
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> Result<(), String> {
+    let mut p = player.lock().unwrap();
+    p.volume = volume.clamp(0.0, 2.0);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_set_target(
+    target: String,
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> Result<(), String> {
+    let mut p = player.lock().unwrap();
+    p.target = target;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn media_get_status(
+    player: State<'_, crate::state::SharedMediaPlayer>,
+) -> crate::state::MediaPlaybackStatus {
+    crate::audio::get_media_status(&player.inner().clone())
+}
+
+#[tauri::command]
+pub fn get_dashboard_data(
+    state: State<'_, crate::state::SharedServerState>,
+    media_player: State<'_, crate::state::SharedMediaPlayer>,
+) -> crate::state::DashboardData {
+    let now = crate::state::current_time();
+    let mut st = state.lock().unwrap();
+
+    let active_ips: std::collections::HashSet<String> = st
+        .client_stats
+        .iter()
+        .filter(|(_, data)| now - data.last_seen < crate::state::CLIENT_TIMEOUT_SECS)
+        .map(|(ip, _)| ip.clone())
+        .collect();
+
+    let mbps = (st.total_bytes_sec as f64 * 8.0 * 5.0) / (1024.0 * 1024.0);
+    st.total_bytes_sec = 0;
+
+    let mut total_lost = 0;
+    let mut total_recv = 0;
+    let mut total_pings_sum = 0.0;
+    let mut total_pings_count = 0;
+    let mut active_clients = vec![];
+
+    for ip in &active_ips {
+        if let Some(data) = st.client_stats.get(ip) {
+            total_lost += data.packets_lost;
+            total_recv += data.packets_recv;
+            let group = st.ip_to_group.get(ip).cloned().unwrap_or_else(|| "Brak".to_string());
+            let name = st.ip_to_name.get(ip).cloned().unwrap_or_else(|| "Uczeń".to_string());
+            let is_speaking = (now - data.last_spoken) < 0.45;
+
+            let avg_ping: u32 = if !data.latencies.is_empty() {
+                let sum: f64 = data.latencies.iter().sum();
+                total_pings_sum += sum;
+                total_pings_count += data.latencies.len();
+                (sum / data.latencies.len() as f64).round() as u32
+            } else {
+                4
+            };
+
+            let client_total = data.packets_recv + data.packets_lost;
+            let client_loss = if client_total > 0 {
+                ((data.packets_lost as f64 / client_total as f64) * 100.0 * 10.0).round() / 10.0
+            } else {
+                0.0
+            };
+
+            let quality = if client_loss >= 8.0 || avg_ping >= 120 {
+                "poor".to_string()
+            } else if client_loss >= 3.0 || avg_ping >= 60 {
+                "fair".to_string()
+            } else if avg_ping >= 25 {
+                "good".to_string()
+            } else {
+                "excellent".to_string()
+            };
+
+            active_clients.push(crate::state::ClientDisplayInfo {
+                ip: ip.clone(),
+                name,
+                group,
+                hand_raised: data.hand_raised,
+                is_speaking,
+                ping_ms: avg_ping,
+                loss_pct: client_loss,
+                quality,
+            });
+        }
+    }
+
+    let loss_percentage = if total_recv + total_lost > 0 {
+        (total_lost as f64 / (total_recv + total_lost) as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let avg_latency = if total_pings_count > 0 {
+        total_pings_sum / total_pings_count as f64
+    } else {
+        0.0
+    };
+
+    let media_status = crate::audio::get_media_status(&media_player.inner().clone());
+
+    crate::state::DashboardData {
+        mbps,
+        avg_latency,
+        loss_percentage,
+        active_clients,
+        media_status,
+    }
 }
