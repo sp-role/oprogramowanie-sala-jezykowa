@@ -26,6 +26,76 @@ pub fn raise_hand(state: State<'_, SharedClientState>) {
 }
 
 #[tauri::command]
+pub fn set_server_ip(ip: String, state: State<'_, SharedClientState>) -> Result<String, String> {
+    let clean = ip.trim();
+    if clean.is_empty() || clean.eq_ignore_ascii_case("auto") {
+        let mut st = state.lock().unwrap();
+        st.server_ip = None;
+        st.manual_server_ip = false;
+        st.last_server_packet = 0.0;
+        return Ok("Włączono automatyczne wykrywanie serwera.".to_string());
+    }
+
+    if let Ok(ipv4) = clean.parse::<std::net::Ipv4Addr>() {
+        let mut st = state.lock().unwrap();
+        st.server_ip = Some(ipv4.to_string());
+        st.manual_server_ip = true;
+        st.last_server_packet = crate::state::current_time();
+
+        // Natychmiastowe wysłanie pakietu sprawdzającego
+        if let Ok(sock) = UdpSocket::bind("0.0.0.0:0") {
+            let _ = sock.send_to(b"VOIP_DISCOVER", format!("{}:{}", ipv4, PORT_DISCOVERY));
+        }
+
+        Ok(format!("Ustawiono adres serwera: {}", ipv4))
+    } else {
+        Err("Wprowadź poprawny adres IPv4 serwera (np. 192.168.0.94)".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn get_server_ip(state: State<'_, SharedClientState>) -> Option<String> {
+    state.lock().unwrap().server_ip.clone()
+}
+
+#[tauri::command]
+pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::ClientStatusPayload {
+    let st = state.lock().unwrap();
+    let is_conn = st.server_ip.is_some();
+    let now = crate::state::current_time();
+    let is_mic_testing = st.is_mic_test_active && now < st.mic_test_until;
+    if !licensing::is_activated() {
+        crate::state::ClientStatusPayload {
+            connected: false,
+            server_ip: "Wymagana aktywacja".to_string(),
+            group: "Zablokowany".to_string(),
+            is_speaking: false,
+            is_muted_by_teacher: false,
+            mic_level: st.mic_level,
+            vad_threshold: st.vad_threshold,
+            volume: st.volume,
+            is_mic_test_active: is_mic_testing,
+        }
+    } else {
+        crate::state::ClientStatusPayload {
+            connected: is_conn,
+            server_ip: if is_conn {
+                st.server_ip.clone().unwrap_or_default()
+            } else {
+                "Szukanie serwera...".to_string()
+            },
+            group: st.group.clone().unwrap_or_else(|| "Poczekalnia".to_string()),
+            is_speaking: st.is_speaking,
+            is_muted_by_teacher: st.is_muted_by_teacher,
+            mic_level: st.mic_level,
+            vad_threshold: st.vad_threshold,
+            volume: st.volume,
+            is_mic_test_active: is_mic_testing,
+        }
+    }
+}
+
+#[tauri::command]
 pub fn get_hardware_id() -> String {
     licensing::get_hardware_id()
 }
@@ -48,13 +118,13 @@ pub fn get_app_version() -> String {
 }
 
 #[tauri::command]
-pub fn check_for_updates(update_url: String) -> Result<crate::updater::UpdateInfo, String> {
-    crate::updater::fetch_update_manifest(&update_url)
+pub async fn check_for_updates(app: tauri::AppHandle) -> Result<crate::updater::UpdateCheckResult, String> {
+    crate::updater::check_update(&app).await
 }
 
 #[tauri::command]
-pub fn install_update(download_url: String) -> Result<String, String> {
-    crate::updater::download_and_install_update(&download_url)
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    crate::updater::install_latest_update(&app).await
 }
 
 #[tauri::command]
@@ -71,3 +141,74 @@ pub fn window_minimize(window: tauri::Window) {
 pub fn window_close(window: tauri::Window) {
     let _ = window.close();
 }
+
+#[tauri::command]
+pub fn report_frontend_error(message: String, stack: Option<String>) {
+    crate::telemetry::capture_error(&message, stack.as_deref());
+}
+
+#[tauri::command]
+pub fn get_audio_devices(state: State<'_, SharedClientState>) -> crate::state::AudioDevicesInfo {
+    let (inputs, outputs) = crate::audio::list_audio_devices();
+    let st = state.lock().unwrap();
+    crate::state::AudioDevicesInfo {
+        input_devices: inputs,
+        output_devices: outputs,
+        selected_input: st.selected_input_device.clone(),
+        selected_output: st.selected_output_device.clone(),
+    }
+}
+
+#[tauri::command]
+pub fn set_input_device(device_name: String, state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.selected_input_device = if device_name == "default" || device_name.is_empty() {
+        None
+    } else {
+        Some(device_name)
+    };
+}
+
+#[tauri::command]
+pub fn set_output_device(device_name: String, state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.selected_output_device = if device_name == "default" || device_name.is_empty() {
+        None
+    } else {
+        Some(device_name)
+    };
+}
+
+#[tauri::command]
+pub fn play_test_sound(streams: State<'_, crate::audio::SharedAudioStreams>) {
+    crate::audio::play_test_chime(&streams);
+}
+
+#[tauri::command]
+pub fn set_vad_threshold(threshold: f32, state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.vad_threshold = threshold.clamp(0.005, 0.200);
+}
+
+#[tauri::command]
+pub fn set_client_volume(volume: f32, state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.volume = volume.clamp(0.0, 2.0);
+}
+
+#[tauri::command]
+pub fn start_mic_test(duration_secs: Option<f64>, state: State<'_, SharedClientState>) {
+    let dur = duration_secs.unwrap_or(5.0).clamp(1.0, 30.0);
+    let mut st = state.lock().unwrap();
+    st.is_mic_test_active = true;
+    st.mic_test_until = crate::state::current_time() + dur;
+}
+
+#[tauri::command]
+pub fn stop_mic_test(state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.is_mic_test_active = false;
+    st.mic_test_until = 0.0;
+}
+
+
