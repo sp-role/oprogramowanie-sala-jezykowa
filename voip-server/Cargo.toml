@@ -2,6 +2,7 @@
 name = "voip-server"
 version = "1.0.0"
 edition = "2021"
+default-run = "voip-server"
 
 [[bin]]
 name = "voip-server"

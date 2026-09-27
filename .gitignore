@@ -1,4 +1,4 @@
-﻿# Rust & Cargo
+# Rust & Cargo
 target/
 **/target/
 **/*.rs.bk
@@ -34,3 +34,9 @@ desktop.ini
 *.log
 *.tmp
 *.bak
+
+# Signing keys & Licenses
+*signing_key*
+*.key
+*.lic
+
