@@ -1,9 +1,9 @@
 {
-  "version": "1.0.1",
-  "latest_version": "1.0.1",
-  "release_date": "2026-09-02",
-  "changelog": "- Udoskonalony system transmisji audio w salach lekcyjnych\n- Nowe wskaüniki aktywnoúci mikrofonÛw (VAD)\n- Automatyczne powiadomienia o aktualizacjach",
-  "server_url": "http://twoj-serwer-ftp.pl/updates/voip-server.exe",
-  "client_url": "http://twoj-serwer-ftp.pl/updates/voip-client.exe",
+  "version": "1.0.0",
+  "latest_version": "1.0.0",
+  "release_date": "2026-09-27",
+  "changelog": "- Udoskonalony system transmisji audio w salach lekcyjnych\n- Inteligentne wska≈∫niki aktywno≈õci mikrofon√≥w (VAD)\n- Zabezpieczenie licencyjne powiƒÖzane ze sprzƒôtem\n- Zintegrowany automatyczny system aktualizacji",
+  "server_url": "https://github.com/sp-role/oprogramowanie-sala-jezykowa/releases/latest",
+  "client_url": "https://github.com/sp-role/oprogramowanie-sala-jezykowa/releases/latest",
   "is_mandatory": false
 }

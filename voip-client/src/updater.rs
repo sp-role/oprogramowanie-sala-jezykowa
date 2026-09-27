@@ -38,6 +38,8 @@ pub async fn check_update(app: &tauri::AppHandle) -> Result<UpdateCheckResult, S
 }
 
 pub async fn install_latest_update(app: &tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+
     let updater = app.updater().map_err(|e| e.to_string())?;
     let update = updater
         .check()
@@ -45,8 +47,26 @@ pub async fn install_latest_update(app: &tauri::AppHandle) -> Result<(), String>
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Brak dostępnych aktualizacji do zainstalowania".to_string())?;
 
+    let app_handle = app.clone();
+    let mut downloaded: u64 = 0;
+
+    let app_handle_finish = app.clone();
     update
-        .download_and_install(|_chunk, _total| {}, || {})
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let _ = app_handle.emit(
+                    "update-download-progress",
+                    serde_json::json!({
+                        "downloaded": downloaded,
+                        "total": total
+                    }),
+                );
+            },
+            move || {
+                let _ = app_handle_finish.emit("update-installing", ());
+            },
+        )
         .await
         .map_err(|e| e.to_string())?;
 

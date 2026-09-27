@@ -9,10 +9,10 @@
     "windows": [
       {
         "title": "Aplikacja Ucznia VoIP",
-        "width": 480,
-        "height": 600,
-        "minWidth": 400,
-        "minHeight": 520,
+        "width": 490,
+        "height": 680,
+        "minWidth": 460,
+        "minHeight": 620,
         "resizable": true,
         "fullscreen": false,
         "decorations": false
@@ -23,11 +23,16 @@
       "capabilities": ["default"]
     }
   },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["msi", "nsis"]
+  },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldTS0VZUEFUSEhPTERFUi4uLg==",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2MDM1RTRBM0VGQzc5NzYKUldSMmVmdytTbDREbHNzQUdsamhoTmY0OEZJdUhnVE5hUi8vWloydWJ5SEgySWYwLzBMNWhlUVIK",
       "endpoints": [
-        "https://github.com/OWNER/REPO/releases/latest/download/latest.json"
+        "https://github.com/sp-role/oprogramowanie-sala-jezykowa/releases/latest/download/latest-voip-client.json"
       ]
     }
   },

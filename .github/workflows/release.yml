@@ -55,3 +55,21 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+
+      - name: Upload dedicated Updater JSON for ${{ matrix.app }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          UPDATER_JSON=$(find target -name "latest.json" 2>/dev/null | head -n 1)
+          if [ -z "$UPDATER_JSON" ]; then
+            UPDATER_JSON=$(find . -name "latest.json" 2>/dev/null | head -n 1)
+          fi
+          if [ -n "$UPDATER_JSON" ]; then
+            TARGET_NAME="latest-${{ matrix.app }}.json"
+            echo "Znaleziono $UPDATER_JSON. Kopiuję do $TARGET_NAME i przesyłam do GitHub Release..."
+            cp "$UPDATER_JSON" "$TARGET_NAME"
+            gh release upload "${{ github.ref_name }}" "$TARGET_NAME" --clobber
+          else
+            echo "Ostrzeżenie: Nie odnaleziono pliku latest.json do wysłania."
+          fi
