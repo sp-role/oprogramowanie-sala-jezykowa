@@ -48,11 +48,26 @@ if exist "%~dp0target\release\voip-server.exe" (
     netsh advfirewall firewall add rule name="VoIP Serwer Release" dir=in action=allow program="%~dp0target\release\voip-server.exe" profile=any enable=yes >nul
     echo   - voip-server.exe (release): ZEZWOLONO
 )
-if exist "%~dp0target\debug\voip-server.exe" (
-    netsh advfirewall firewall delete rule name="VoIP Serwer Debug" >nul 2>&1
-    netsh advfirewall firewall add rule name="VoIP Serwer Debug" dir=in action=allow program="%~dp0target\debug\voip-server.exe" profile=any enable=yes >nul
-    echo   - voip-server.exe (debug): ZEZWOLONO
+if exist "%~dp0voip-server.exe" (
+    netsh advfirewall firewall delete rule name="VoIP Serwer Portable" >nul 2>&1
+    netsh advfirewall firewall add rule name="VoIP Serwer Portable" dir=in action=allow program="%~dp0voip-server.exe" profile=any enable=yes >nul
+    echo   - voip-server.exe (portable): ZEZWOLONO
 )
+if exist "%~dp0target\release\voip-client.exe" (
+    netsh advfirewall firewall delete rule name="VoIP Klient Release" >nul 2>&1
+    netsh advfirewall firewall add rule name="VoIP Klient Release" dir=in action=allow program="%~dp0target\release\voip-client.exe" profile=any enable=yes >nul
+    echo   - voip-client.exe (release): ZEZWOLONO
+)
+if exist "%~dp0voip-client.exe" (
+    netsh advfirewall firewall delete rule name="VoIP Klient Portable" >nul 2>&1
+    netsh advfirewall firewall add rule name="VoIP Klient Portable" dir=in action=allow program="%~dp0voip-client.exe" profile=any enable=yes >nul
+    echo   - voip-client.exe (portable): ZEZWOLONO
+)
+netsh advfirewall firewall delete rule name="VoIP Klient ProgramFiles" >nul 2>&1
+netsh advfirewall firewall add rule name="VoIP Klient ProgramFiles" dir=in action=allow program="%ProgramFiles%\VoIP Client\VoIP Client.exe" profile=any enable=yes >nul
+netsh advfirewall firewall delete rule name="VoIP Serwer ProgramFiles" >nul 2>&1
+netsh advfirewall firewall add rule name="VoIP Serwer ProgramFiles" dir=in action=allow program="%ProgramFiles%\Serwer VoIP\Serwer VoIP.exe" profile=any enable=yes >nul
+
 
 echo.
 echo [4/4] Przełączanie aktywnej sieci na profil Prywatny...

@@ -1505,11 +1505,28 @@ async function applyTauriUpdate() {
   }
 }
 
+async function checkAndPromptFirewall() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.invoke) return;
+  try {
+    const isConfigured = await tauri.invoke('check_firewall_rule');
+    if (!isConfigured) {
+      const isAdmin = await tauri.invoke('check_admin');
+      if (isAdmin) {
+        await tauri.invoke('add_firewall_rule');
+      }
+    }
+  } catch (e) {
+    console.warn('Firewall auto-check:', e);
+  }
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   initClientListener();
   initClientAppVersion();
   initSavedAudioSettings();
   initClientUpdateListeners();
+  checkAndPromptFirewall();
   // Sprawdź aktualizację automatycznie przy starcie aplikacji (600ms po zainicjowaniu widoku)
   setTimeout(() => {
     checkForAppUpdate(false);

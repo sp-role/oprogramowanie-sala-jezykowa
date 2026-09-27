@@ -39,6 +39,9 @@ pub fn run() {
         .manage(state.clone())
         .manage(audio_streams.clone())
         .invoke_handler(tauri::generate_handler![
+            commands::check_admin,
+            commands::check_firewall_rule,
+            commands::add_firewall_rule,
             commands::set_username,
             commands::join_lesson,
             commands::leave_lesson,
@@ -115,5 +118,10 @@ pub fn run() {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--configure-firewall") {
+        let ok = commands::apply_firewall_rules_internal();
+        std::process::exit(if ok { 0 } else { 1 });
+    }
     run();
 }

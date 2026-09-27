@@ -5337,6 +5337,7 @@ dependencies = [
  "byteorder",
  "cpal",
  "if-addrs",
+ "is_elevated",
  "mdns-sd",
  "sentry",
  "serde",
