@@ -6,7 +6,7 @@ pub const PORT_AUDIO: u16 = 5005;
 pub const PORT_DISCOVERY: u16 = 5006;
 pub const SAMPLE_RATE: u32 = 48000;
 pub const VAD_THRESHOLD: f32 = 0.025; // Progowanie głosu (~800 w 16-bit)
-pub const SERVER_TIMEOUT_SECS: f64 = 6.0; // Po ilu sekundach braku pakietów uznać serwer za rozłączony
+pub const SERVER_TIMEOUT_SECS: f64 = 10.0; // Po ilu sekundach braku pakietów uznać serwer za rozłączony
 
 pub fn current_time() -> f64 {
     SystemTime::now()
@@ -38,6 +38,9 @@ pub struct ClientState {
     pub mic_record_buffer: Vec<f32>,
     pub is_self_muted: bool,
     pub room_members: Vec<RoomMemberInfo>,
+    pub is_joined: bool,
+    pub hand_raised: bool,
+    pub agc_enabled: bool,
 }
 
 impl Default for ClientState {
@@ -64,6 +67,9 @@ impl Default for ClientState {
             mic_record_buffer: Vec::new(),
             is_self_muted: false,
             room_members: Vec::new(),
+            is_joined: false,
+            hand_raised: false,
+            agc_enabled: true,
         }
     }
 }
@@ -71,7 +77,7 @@ impl Default for ClientState {
 impl ClientState {
     #[allow(dead_code)]
     pub fn is_registered(&self) -> bool {
-        !self.username.trim().is_empty()
+        self.is_joined && !self.username.trim().is_empty()
     }
 
     /// Sprawdza, czy klient ma aktywny kontakt z serwerem
@@ -128,4 +134,7 @@ pub struct ClientStatusPayload {
     pub mic_test_phase: String,
     pub mic_test_countdown: f64,
     pub room_members: Vec<RoomMemberInfo>,
+    pub is_joined: bool,
+    pub hand_raised: bool,
+    pub agc_enabled: bool,
 }

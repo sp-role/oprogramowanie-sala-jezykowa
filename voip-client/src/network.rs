@@ -129,7 +129,7 @@ pub fn discover_server(state: SharedClientState) {
     let mut buf = [0u8; 256];
 
     loop {
-        let has_server = {
+        let (has_server, server_ip_opt) = {
             let mut st = state.lock().unwrap();
             let now = current_time();
             // Watchdog utraty łączności (jeśli minęło > SERVER_TIMEOUT_SECS od ostatniego pakietu i nie jest to ręcznie wpisany IP)
@@ -140,19 +140,32 @@ pub fn discover_server(state: SharedClientState) {
                 st.is_speaking = false;
                 st.is_muted_by_teacher = false;
             }
-            st.server_ip.is_some()
+            (st.server_ip.is_some(), st.server_ip.clone())
         };
 
-        // Gdy serwer jest już przypisany, wstrzymaj nadawanie zapytań
+        // Gdy serwer jest już przypisany, okresowo wysyłamy VOIP_PING, aby utrzymać stan aktywny i zweryfikować czy serwer działa
         if has_server {
-            if let Ok((size, _)) = socket.recv_from(&mut buf) {
-                let msg = String::from_utf8_lossy(&buf[..size]);
-                if msg.starts_with("VOIP_SERVER_ANNOUNCE") || msg.starts_with("VOIP_HERE") {
-                    let mut st = state.lock().unwrap();
-                    st.last_server_packet = current_time();
+            if let Some(ref s_ip) = server_ip_opt {
+                let target = format!("{}:{}", s_ip, PORT_DISCOVERY);
+                let _ = socket.send_to(b"VOIP_PING", &target);
+            }
+
+            let wait_start = std::time::Instant::now();
+            while wait_start.elapsed() < Duration::from_millis(1500) {
+                match socket.recv_from(&mut buf) {
+                    Ok((size, _addr)) => {
+                        let msg = String::from_utf8_lossy(&buf[..size]);
+                        if msg.starts_with("VOIP_PONG") || msg.starts_with("VOIP_SERVER_ANNOUNCE") || msg.starts_with("VOIP_HERE") {
+                            let mut st = state.lock().unwrap();
+                            st.last_server_packet = current_time();
+                        }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => break,
                 }
             }
-            std::thread::sleep(Duration::from_millis(500));
             continue;
         }
 
@@ -264,6 +277,9 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 mic_test_phase: st.mic_test_phase.clone(),
                 mic_test_countdown: st.mic_test_countdown,
                 room_members: vec![],
+                is_joined: false,
+                hand_raised: false,
+                agc_enabled: st.agc_enabled,
             }
         } else {
             ClientStatusPayload {
@@ -286,6 +302,9 @@ pub fn run_ui_updater(app_handle: AppHandle, state: SharedClientState) {
                 mic_test_phase: st.mic_test_phase.clone(),
                 mic_test_countdown: st.mic_test_countdown,
                 room_members: st.room_members.clone(),
+                is_joined: st.is_joined,
+                hand_raised: st.hand_raised,
+                agc_enabled: st.agc_enabled,
             }
         };
         drop(st);

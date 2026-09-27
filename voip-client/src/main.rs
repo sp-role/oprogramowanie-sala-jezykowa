@@ -1,5 +1,8 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod audio;
 mod commands;
+
 mod licensing;
 mod network;
 mod state;
@@ -37,7 +40,10 @@ pub fn run() {
         .manage(audio_streams.clone())
         .invoke_handler(tauri::generate_handler![
             commands::set_username,
+            commands::join_lesson,
+            commands::leave_lesson,
             commands::raise_hand,
+            commands::toggle_raise_hand,
             commands::get_client_status,
             commands::get_hardware_id,
             commands::check_activation,
@@ -56,6 +62,7 @@ pub fn run() {
             commands::set_server_ip,
             commands::get_server_ip,
             commands::set_vad_threshold,
+            commands::set_agc_enabled,
             commands::set_client_volume,
             commands::start_mic_test,
             commands::stop_mic_test,
@@ -64,6 +71,14 @@ pub fn run() {
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            // Ustawienie minimalnego rozmiaru okna, poniżej którego nie da się zmniejszyć aplikacji
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
+                    width: 460.0,
+                    height: 620.0,
+                })));
+            }
 
             // 1. Wyszukiwanie serwera w podsieci przez UDP Broadcast
             let state_disc = state_clone.clone();

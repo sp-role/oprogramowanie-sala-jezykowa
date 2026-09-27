@@ -16,16 +16,44 @@ pub fn set_username(name: String, state: State<'_, SharedClientState>) {
 }
 
 #[tauri::command]
+pub fn join_lesson(name: String, state: State<'_, SharedClientState>) {
+    if !licensing::is_activated() {
+        return;
+    }
+    let mut st = state.lock().unwrap();
+    st.username = name.trim().to_string();
+    st.is_joined = true;
+}
+
+#[tauri::command]
 pub fn raise_hand(state: State<'_, SharedClientState>) {
     if !licensing::is_activated() {
         return;
     }
-    let st = state.lock().unwrap();
+    let mut st = state.lock().unwrap();
+    st.hand_raised = true;
     if let Some(ip) = &st.server_ip {
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
             let _ = socket.send_to(b"VOIP_HAND", format!("{}:{}", ip, PORT_DISCOVERY));
         }
     }
+}
+
+#[tauri::command]
+pub fn toggle_raise_hand(state: State<'_, SharedClientState>) -> bool {
+    if !licensing::is_activated() {
+        return false;
+    }
+    let mut st = state.lock().unwrap();
+    st.hand_raised = !st.hand_raised;
+    let is_raised = st.hand_raised;
+    if let Some(ip) = &st.server_ip {
+        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+            let packet: &[u8] = if is_raised { b"VOIP_HAND" } else { b"VOIP_HAND_DOWN" };
+            let _ = socket.send_to(packet, format!("{}:{}", ip, PORT_DISCOVERY));
+        }
+    }
+    is_raised
 }
 
 #[tauri::command]
@@ -81,6 +109,9 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             mic_test_phase: st.mic_test_phase.clone(),
             mic_test_countdown: st.mic_test_countdown,
             room_members: vec![],
+            is_joined: false,
+            hand_raised: false,
+            agc_enabled: st.agc_enabled,
         }
     } else {
         crate::state::ClientStatusPayload {
@@ -101,8 +132,17 @@ pub fn get_client_status(state: State<'_, SharedClientState>) -> crate::state::C
             mic_test_phase: st.mic_test_phase.clone(),
             mic_test_countdown: st.mic_test_countdown,
             room_members: st.room_members.clone(),
+            is_joined: st.is_joined,
+            hand_raised: st.hand_raised,
+            agc_enabled: st.agc_enabled,
         }
     }
+}
+
+#[tauri::command]
+pub fn set_agc_enabled(enabled: bool, state: State<'_, SharedClientState>) {
+    let mut st = state.lock().unwrap();
+    st.agc_enabled = enabled;
 }
 
 #[tauri::command]
@@ -117,11 +157,29 @@ pub fn leave_room(state: State<'_, SharedClientState>) -> Result<(), String> {
     let mut st = state.lock().unwrap();
     st.group = Some("Poczekalnia".to_string());
     st.room_members.clear();
+    st.hand_raised = false;
 
     if let Some(ref server_ip) = st.server_ip {
         if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
             let target = format!("{}:{}", server_ip, crate::state::PORT_AUDIO);
             let _ = socket.send_to(b"VOIP_LEAVE", &target);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn leave_lesson(state: State<'_, SharedClientState>) -> Result<(), String> {
+    let mut st = state.lock().unwrap();
+    st.is_joined = false;
+    st.group = None;
+    st.room_members.clear();
+    st.hand_raised = false;
+
+    if let Some(ref server_ip) = st.server_ip {
+        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            let target = format!("{}:{}", server_ip, crate::state::PORT_AUDIO);
+            let _ = socket.send_to(b"VOIP_DISCONNECT", &target);
         }
     }
     Ok(())
@@ -176,6 +234,7 @@ pub fn window_close(window: tauri::Window) {
 
 #[tauri::command]
 pub fn report_frontend_error(message: String, stack: Option<String>) {
+    eprintln!("[FRONTEND ERROR] {}: {:?}", message, stack);
     crate::telemetry::capture_error(&message, stack.as_deref());
 }
 
@@ -235,6 +294,7 @@ pub fn start_mic_test(
     audio_streams: State<'_, SharedAudioStreams>,
 ) {
     let dur = duration_secs.unwrap_or(5.0).clamp(2.0, 15.0);
+    println!("[TEST-MIC] Start procedury testu mikrofonu ({}s)", dur);
     {
         let mut st = state.lock().unwrap();
         st.is_mic_test_active = true;
@@ -261,7 +321,7 @@ pub fn start_mic_test(
             std::thread::sleep(Duration::from_millis(50));
             let mut st = state_clone.lock().unwrap();
             if st.mic_test_phase != "recording" {
-                // Test przerwany ręcznie przez użytkownika
+                println!("[TEST-MIC] Przerwano nagrywanie ręcznie.");
                 return;
             }
             let remaining = (record_end - crate::state::current_time()).max(0.0);
@@ -277,7 +337,10 @@ pub fn start_mic_test(
             std::mem::take(&mut st.mic_record_buffer)
         };
 
+        println!("[TEST-MIC] Nagrywanie zakończone. Zarejestrowano próbek: {}", recorded.len());
+
         if recorded.is_empty() {
+            eprintln!("[TEST-MIC BŁĄD] Bufor nagrania jest pusty (brak danych ze strumienia mikrofonu).");
             let mut st = state_clone.lock().unwrap();
             st.mic_test_phase = "idle".to_string();
             st.is_mic_test_active = false;
@@ -296,6 +359,7 @@ pub fn start_mic_test(
         }
 
         let play_duration = recorded.len() as f64 / crate::state::SAMPLE_RATE as f64;
+        println!("[TEST-MIC] Odsłuch nagrania w słuchawkach przez {:.1}s...", play_duration);
 
         // Faza 2: Czysty odsłuch nagrania w słuchawkach
         {
@@ -316,7 +380,7 @@ pub fn start_mic_test(
             std::thread::sleep(Duration::from_millis(50));
             let mut st = state_clone.lock().unwrap();
             if st.mic_test_phase != "playing" {
-                // Odsłuch przerwany ręcznie przez użytkownika
+                println!("[TEST-MIC] Odsłuch przerwany ręcznie.");
                 let mut streams = streams_clone.lock().unwrap();
                 streams.remove("__mic_test__");
                 return;
@@ -324,6 +388,8 @@ pub fn start_mic_test(
             let remaining = (play_end - crate::state::current_time()).max(0.0);
             st.mic_test_countdown = remaining;
         }
+
+        println!("[TEST-MIC] Procedura testu mikrofonu ukończona sukcesem.");
 
         // Zakończenie testu - powrót do stanu gotowości
         {
@@ -346,6 +412,7 @@ pub fn stop_mic_test(
     state: State<'_, SharedClientState>,
     audio_streams: State<'_, SharedAudioStreams>,
 ) {
+    println!("[TEST-MIC] Wywołano stop_mic_test.");
     let mut st = state.lock().unwrap();
     st.is_mic_test_active = false;
     st.mic_test_phase = "idle".to_string();

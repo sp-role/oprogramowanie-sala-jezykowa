@@ -33,74 +33,117 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 
-const AVATARS = [
-  { id: 'scholar', emoji: '🎓', label: 'Uczeń' },
-  { id: 'fox', emoji: '🦊', label: 'Lis' },
-  { id: 'panda', emoji: '🐼', label: 'Panda' },
-  { id: 'lion', emoji: '🦁', label: 'Lew' },
-  { id: 'cat', emoji: '🐱', label: 'Kot' },
-  { id: 'robot', emoji: '🤖', label: 'Robot' },
-  { id: 'gamer', emoji: '👾', label: 'Gracz' },
-  { id: 'rocket', emoji: '🚀', label: 'Rakieta' },
-  { id: 'music', emoji: '🎧', label: 'Muzyk' },
-  { id: 'lightning', emoji: '⚡', label: 'Błyskawica' },
-  { id: 'artist', emoji: '🎨', label: 'Artysta' },
-  { id: 'owl', emoji: '🦉', label: 'Sowa' },
+const AVATAR_PALETTES = [
+  { id: 'blue', label: 'Błękit', bg: 'from-blue-600 to-indigo-700', border: 'border-blue-400', hex: '#2563eb' },
+  { id: 'emerald', label: 'Szmaragd', bg: 'from-emerald-600 to-teal-700', border: 'border-emerald-400', hex: '#059669' },
+  { id: 'indigo', label: 'Indygo', bg: 'from-indigo-600 to-purple-700', border: 'border-indigo-400', hex: '#4f46e5' },
+  { id: 'violet', label: 'Fiolet', bg: 'from-violet-600 to-fuchsia-700', border: 'border-violet-400', hex: '#7c3aed' },
+  { id: 'amber', label: 'Bursztyn', bg: 'from-amber-500 to-orange-600', border: 'border-amber-400', hex: '#d97706' },
+  { id: 'rose', label: 'Koral', bg: 'from-rose-500 to-pink-600', border: 'border-rose-400', hex: '#e11d48' },
+  { id: 'cyan', label: 'Morski', bg: 'from-cyan-600 to-blue-600', border: 'border-cyan-400', hex: '#0891b2' },
+  { id: 'slate', label: 'Grafit', bg: 'from-slate-600 to-slate-800', border: 'border-slate-400', hex: '#475569' },
 ];
 
-let selectedAvatarId = localStorage.getItem('voip_avatar') || 'scholar';
+let selectedAvatarId = localStorage.getItem('voip_avatar') || 'blue';
 let tempSelectedAvatarId = selectedAvatarId;
 let currentHardwareId = '';
 
-function getAvatarEmoji(id) {
-  const found = AVATARS.find((a) => a.id === id);
-  return found ? found.emoji : '🎓';
+function getPalette(id) {
+  if (!id) return AVATAR_PALETTES[0];
+  const found = AVATAR_PALETTES.find((p) => p.id === id);
+  if (found) return found;
+  const legacyMap = {
+    scholar: 'blue', fox: 'amber', panda: 'slate', lion: 'amber',
+    cat: 'rose', robot: 'cyan', gamer: 'violet', rocket: 'indigo',
+    music: 'emerald', lightning: 'amber', artist: 'rose', owl: 'slate'
+  };
+  const mappedId = legacyMap[id] || 'blue';
+  return AVATAR_PALETTES.find((p) => p.id === mappedId) || AVATAR_PALETTES[0];
 }
 
-function getAvatarLabel(id) {
-  const found = AVATARS.find((a) => a.id === id);
-  return found ? found.label : 'Uczeń';
+function getInitials(name) {
+  if (!name) return 'U';
+  const clean = name.replace(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*/u, '').trim();
+  if (!clean) return 'U';
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return clean.substring(0, Math.min(2, clean.length)).toUpperCase();
+}
+
+function getDeterministicPalette(name) {
+  if (!name) return AVATAR_PALETTES[0];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash << 5) - hash + name.charCodeAt(i);
+    hash |= 0;
+  }
+  const idx = Math.abs(hash) % AVATAR_PALETTES.length;
+  return AVATAR_PALETTES[idx];
 }
 
 function updateAvatarUI() {
-  const emoji = getAvatarEmoji(selectedAvatarId);
-  const profileEmoji = document.getElementById('profile-avatar-emoji');
-  if (profileEmoji) profileEmoji.innerText = emoji;
+  const pal = getPalette(selectedAvatarId);
+  const rawName = (localStorage.getItem('voip_username') || 'Uczeń').trim();
+  const initials = getInitials(rawName);
+
+  const profileContainer = document.getElementById('profile-avatar-container');
+  if (profileContainer) {
+    profileContainer.className = `w-full h-full rounded-xl bg-gradient-to-br ${pal.bg} text-white font-bold text-sm flex items-center justify-center border border-white/20 select-none`;
+    profileContainer.innerText = initials;
+  }
 
   const btnPreview = document.getElementById('btn-avatar-preview');
-  if (btnPreview) btnPreview.innerText = emoji;
+  if (btnPreview) {
+    btnPreview.className = `w-3.5 h-3.5 rounded-full inline-block bg-gradient-to-br ${pal.bg} border border-white/30`;
+    btnPreview.innerText = '';
+  }
 
-  const joinEmoji = document.getElementById('join-avatar-emoji');
-  if (joinEmoji) joinEmoji.innerText = emoji;
+  const skypeAvatar = document.getElementById('skype-self-avatar-preview');
+  if (skypeAvatar) {
+    skypeAvatar.className = `w-5 h-5 rounded-md bg-gradient-to-br ${pal.bg} text-white font-bold text-[10px] flex items-center justify-center border border-white/20`;
+    skypeAvatar.innerText = initials;
+  }
+
+  const joinAvatar = document.getElementById('join-avatar-emoji');
+  if (joinAvatar) {
+    joinAvatar.className = `w-12 h-12 rounded-xl bg-gradient-to-br ${pal.bg} text-white font-bold text-base flex items-center justify-center border border-white/20 shadow-md select-none`;
+    joinAvatar.innerText = initials;
+  }
 }
 
 function renderAvatarsGrid() {
   const grid = document.getElementById('avatars-grid');
   if (!grid) return;
 
-  grid.innerHTML = AVATARS.map((a) => {
-    const isSel = a.id === tempSelectedAvatarId;
+  const currentName = (document.getElementById('modal-username-input')?.value || localStorage.getItem('voip_username') || 'Uczeń').trim();
+  const initials = getInitials(currentName);
+
+  grid.innerHTML = AVATAR_PALETTES.map((p) => {
+    const isSel = p.id === tempSelectedAvatarId;
     return `
-      <button type="button" onclick="selectTempAvatar('${a.id}')"
-        class="avatar-option p-2.5 rounded-2xl border flex flex-col items-center justify-center cursor-pointer transition ${
+      <button type="button" onclick="selectTempAvatar('${p.id}')"
+        class="p-2 rounded-xl border flex flex-col items-center justify-center gap-1.5 cursor-pointer transition ${
           isSel
-            ? 'selected border-[#16a34a] bg-emerald-50 text-[#16a34a] ring-2 ring-emerald-400'
-            : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700'
+            ? 'border-emerald-500 bg-emerald-500/15 ring-2 ring-emerald-400 text-emerald-400'
+            : 'border-slate-700 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300'
         }">
-        <span class="text-2xl select-none mb-1">${a.emoji}</span>
-        <span class="text-[10px] font-bold truncate max-w-full">${a.label}</span>
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br ${p.bg} border border-white/20 flex items-center justify-center text-white text-xs font-bold shadow-sm">
+          ${initials}
+        </div>
+        <span class="text-[10px] font-semibold truncate max-w-full">${p.label}</span>
       </button>
     `;
   }).join('');
-
-  const previewIcon = document.getElementById('modal-preview-icon');
-  const previewLabel = document.getElementById('modal-preview-label');
-  if (previewIcon) previewIcon.innerText = getAvatarEmoji(tempSelectedAvatarId);
-  if (previewLabel) previewLabel.innerText = getAvatarLabel(tempSelectedAvatarId);
 }
 
 function openAvatarModal() {
   tempSelectedAvatarId = selectedAvatarId;
+  const modalInput = document.getElementById('modal-username-input');
+  if (modalInput) {
+    modalInput.value = localStorage.getItem('voip_username') || '';
+  }
   renderAvatarsGrid();
   document.getElementById('avatar-modal')?.classList.remove('hidden');
 }
@@ -117,16 +160,27 @@ function selectTempAvatar(id) {
 function saveAvatarSelection() {
   selectedAvatarId = tempSelectedAvatarId;
   localStorage.setItem('voip_avatar', selectedAvatarId);
+
+  const modalInput = document.getElementById('modal-username-input');
+  if (modalInput && modalInput.value.trim()) {
+    const newName = modalInput.value.trim();
+    localStorage.setItem('voip_username', newName);
+    const mainInput = document.getElementById('username-input');
+    if (mainInput) mainInput.value = newName;
+    const dn = document.getElementById('display-name');
+    if (dn) dn.innerText = newName;
+    const skypeSelf = document.getElementById('skype-self-name-preview');
+    if (skypeSelf) skypeSelf.innerText = newName;
+  }
+
   updateAvatarUI();
   closeAvatarModal();
 
-  // Zaktualizuj nazwę na serwerze z nowym awatarem jeśli uczeń jest zalogowany
   const rawName = (localStorage.getItem('voip_username') || '').trim();
   if (rawName && rawName !== 'Uczeń') {
     const tauri = getTauri();
     if (tauri && tauri.invoke) {
-      const fullDisplayName = `${getAvatarEmoji(selectedAvatarId)} ${rawName}`;
-      tauri.invoke('set_username', { name: fullDisplayName });
+      tauri.invoke('set_username', { name: rawName });
     }
   }
 }
@@ -180,9 +234,29 @@ function windowMinimize() {
 }
 
 function windowClose() {
-  const tauri = getTauri();
-  if (tauri && tauri.invoke) tauri.invoke('window_close');
+  if (isJoinedState) {
+    document.getElementById('exit-confirm-modal')?.classList.remove('hidden');
+    return;
+  }
+  forceWindowClose();
 }
+
+function closeExitConfirmModal() {
+  document.getElementById('exit-confirm-modal')?.classList.add('hidden');
+}
+
+function minimizeAndCloseExitModal() {
+  closeExitConfirmModal();
+  windowMinimize();
+}
+
+function forceWindowClose() {
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('window_close');
+  }
+}
+
 
 async function copyHardwareId() {
   if (!currentHardwareId) return;
@@ -247,89 +321,92 @@ async function submitActivation() {
 }
 
 // -------------------------------------------------------------
+// -------------------------------------------------------------
 // LOGIKA UCZNIA / PROFILU
 // -------------------------------------------------------------
-function confirmJoin() {
-  const input = document.getElementById('join-name-input');
-  const rawName = input.value.trim();
+let isJoinedState = false;
+
+function confirmJoinFromLobby() {
+  const input = document.getElementById('username-input');
+  const rawName = (input?.value || '').trim();
   if (rawName.length > 0 && rawName !== 'Uczeń') {
     localStorage.setItem('voip_username', rawName);
-    document.getElementById('username-input').value = rawName;
-    document.getElementById('display-name').innerText = rawName;
-    document.getElementById('join-modal').classList.add('hidden');
+    const displayNameElem = document.getElementById('display-name');
+    if (displayNameElem) displayNameElem.innerText = rawName;
+    const joinInput = document.getElementById('join-name-input');
+    if (joinInput) joinInput.value = rawName;
+    document.getElementById('join-modal')?.classList.add('hidden');
 
+    isJoinedState = true;
     const tauri = getTauri();
     if (tauri && tauri.invoke) {
-      const fullDisplayName = `${getAvatarEmoji(selectedAvatarId)} ${rawName}`;
-      tauri.invoke('set_username', { name: fullDisplayName });
+      tauri.invoke('join_lesson', { name: rawName }).catch(console.error);
     }
+    const viewLobby = document.getElementById('view-lobby');
+    const viewSkype = document.getElementById('view-skype-call');
+    if (viewLobby) viewLobby.classList.add('hidden');
+    if (viewSkype) viewSkype.classList.remove('hidden');
+    showToast(`Dołączono do lekcji jako: ${rawName}`, 'success');
   } else {
-    input.classList.add('ring-2', 'ring-red-500');
-    input.focus();
+    input?.classList.add('ring-2', 'ring-red-500');
+    input?.focus();
+    showToast('Wpisz swoje imię i nazwisko przed dołączeniem do lekcji', 'warning');
+  }
+}
+
+function confirmJoin() {
+  const input = document.getElementById('join-name-input');
+  const rawName = (input?.value || '').trim();
+  if (rawName.length > 0 && rawName !== 'Uczeń') {
+    const lobbyInput = document.getElementById('username-input');
+    if (lobbyInput) lobbyInput.value = rawName;
+    confirmJoinFromLobby();
+  } else {
+    input?.classList.add('ring-2', 'ring-red-500');
+    input?.focus();
+    showToast('Wpisz swoje imię i nazwisko', 'warning');
   }
 }
 
 function saveUsername() {
-  const rawName = document.getElementById('username-input').value.trim();
-  if (rawName.length > 0 && rawName !== 'Uczeń') {
+  const rawName = document.getElementById('username-input')?.value.trim();
+  if (rawName && rawName.length > 0 && rawName !== 'Uczeń') {
     localStorage.setItem('voip_username', rawName);
-    document.getElementById('display-name').innerText = rawName;
-    const tauri = getTauri();
-    if (tauri && tauri.invoke) {
-      const fullDisplayName = `${getAvatarEmoji(selectedAvatarId)} ${rawName}`;
-      tauri.invoke('set_username', { name: fullDisplayName });
-    }
+    const dn = document.getElementById('display-name');
+    if (dn) dn.innerText = rawName;
+    showToast('Zapisano profil ucznia', 'info');
   }
 }
 
 let isHandRaised = false;
 
-function raiseHand() {
+async function raiseHand() {
   const tauri = getTauri();
-  if (tauri && tauri.invoke) tauri.invoke('raise_hand');
-
-  isHandRaised = true;
-  const skypeBtn = document.getElementById('skype-raise-hand-btn');
-  if (skypeBtn) {
-    skypeBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-bounce';
-    skypeBtn.title = 'Ręka podniesiona! Nauczyciel widzi Twoje zgłoszenie';
-  }
-  showToast('Poproszono nauczyciela o pomoc! ✋', 'info');
-
-  setTimeout(() => {
-    isHandRaised = false;
-    if (skypeBtn) {
-      skypeBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
-      skypeBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
+  let nextState = !isHandRaised;
+  if (tauri && tauri.invoke) {
+    try {
+      nextState = await tauri.invoke('toggle_raise_hand');
+    } catch (e) {
+      console.error('Błąd toggle_raise_hand:', e);
     }
-  }, 4000);
-}
+  }
+  isHandRaised = nextState;
 
-async function toggleSelfMute() {
-  const tauri = getTauri();
-  if (!tauri || !tauri.invoke) return;
-  try {
-    const isMuted = await tauri.invoke('toggle_self_mute');
-    showToast(isMuted ? 'Mikrofon został wyciszony' : 'Mikrofon włączony', isMuted ? 'info' : 'success');
-    const st = await tauri.invoke('get_client_status');
-    if (st) applyClientStatus(st);
-  } catch (e) {
-    console.error('Błąd toggle_self_mute:', e);
+  // Przycisk w doku Skype
+  const skypeHandBtn = document.getElementById('skype-raise-hand-btn');
+  if (skypeHandBtn) {
+    if (isHandRaised) {
+      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 ring-4 ring-amber-400/40 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-pulse';
+      skypeHandBtn.title = 'Ręka podniesiona (kliknij, aby odwołać)';
+      showToast('Zgłoszono prośbę o pomoc do nauczyciela', 'info');
+    } else {
+      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
+      skypeHandBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
+      showToast('Odwołano prośbę o pomoc', 'info');
+    }
   }
 }
 
-async function handleHangupClick() {
-  const tauri = getTauri();
-  if (!tauri || !tauri.invoke) return;
-  try {
-    await tauri.invoke('leave_room');
-    showToast('Rozłączono z pokojem. Przeniesiono do Poczekalni.', 'info');
-    const st = await tauri.invoke('get_client_status');
-    if (st) applyClientStatus(st);
-  } catch (e) {
-    console.error('Błąd leave_room:', e);
-  }
-}
 
 function handleClientVolumeChange(val) {
   const num = parseInt(val, 10) || 100;
@@ -406,22 +483,22 @@ function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false)
     if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center transition-all duration-200 shadow-sm';
     if (micStatusLabel) {
       micStatusLabel.innerText = 'Mówisz teraz (Aktywny)';
-      micStatusLabel.className = 'text-xs font-bold text-emerald-700';
+      micStatusLabel.className = 'text-xs font-bold text-emerald-400';
     }
     if (bars[0]) bars[0].className = 'w-1 h-3.5 bg-emerald-500 rounded-full animate-pulse';
     if (bars[1]) bars[1].className = 'w-1 h-5 bg-emerald-500 rounded-full animate-pulse delay-75';
     if (bars[2]) bars[2].className = 'w-1 h-4 bg-emerald-500 rounded-full animate-pulse delay-150';
     if (bars[3]) bars[3].className = 'w-1 h-3 bg-emerald-500 rounded-full animate-pulse delay-100';
   } else {
-    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200';
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 flex items-center justify-center transition-all duration-200';
     if (micStatusLabel) {
       micStatusLabel.innerText = 'Czuwanie (VAD)';
-      micStatusLabel.className = 'text-xs font-bold text-slate-700';
+      micStatusLabel.className = 'text-xs font-bold text-sky-200';
     }
-    if (bars[0]) bars[0].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[1]) bars[1].className = 'w-1 h-3 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[2]) bars[2].className = 'w-1 h-4 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[3]) bars[3].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
+    if (bars[0]) bars[0].className = 'w-1 h-2 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[1]) bars[1].className = 'w-1 h-3 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[2]) bars[2].className = 'w-1 h-4 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[3]) bars[3].className = 'w-1 h-2 bg-slate-600 rounded-full transition-all duration-150';
   }
 }
 
@@ -429,72 +506,77 @@ function initStudentProfile() {
   updateAvatarUI();
   const savedName = (localStorage.getItem('voip_username') || '').trim();
   const joinModal = document.getElementById('join-modal');
-  const joinInput = document.getElementById('join-name-input');
+  if (joinModal) joinModal.classList.add('hidden');
 
-  if (!savedName || savedName === 'Uczeń') {
-    joinModal.classList.remove('hidden');
-    joinInput.focus();
-  } else {
-    joinModal.classList.add('hidden');
-    document.getElementById('username-input').value = savedName;
-    document.getElementById('display-name').innerText = savedName;
-    const tauri = getTauri();
-    if (tauri && tauri.invoke) {
-      const fullDisplayName = `${getAvatarEmoji(selectedAvatarId)} ${savedName}`;
-      tauri.invoke('set_username', { name: fullDisplayName });
-    }
+  if (savedName && savedName !== 'Uczeń') {
+    const input = document.getElementById('username-input');
+    if (input) input.value = savedName;
+    const dn = document.getElementById('display-name');
+    if (dn) dn.innerText = savedName;
+    const joinInput = document.getElementById('join-name-input');
+    if (joinInput) joinInput.value = savedName;
   }
 }
 
 let lastAssignedGroup = null;
 
 function parseUserAvatarAndName(rawName) {
-  if (!rawName) return { emoji: '🎓', name: 'Uczeń' };
+  if (!rawName) return { name: 'Uczeń', initials: 'U' };
   const trimmed = rawName.trim();
-  const match = trimmed.match(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*(.*)$/u);
-  if (match) {
-    return {
-      emoji: match[1],
-      name: match[2].trim() || 'Uczeń',
-    };
-  }
-  return { emoji: '🎓', name: trimmed };
+  const clean = trimmed.replace(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*/u, '').trim();
+  const finalName = clean || 'Uczeń';
+  return {
+    name: finalName,
+    initials: getInitials(finalName),
+  };
 }
 
 function renderParticipantCardHtml(card) {
+  const pal = card.palette || AVATAR_PALETTES[0];
   return `
-    <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-3xl bg-slate-900/90 border-2 ${
+    <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-2xl bg-[#0f172a] border ${
       card.is_speaking
-        ? 'border-emerald-400 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-500/25 bg-slate-900'
-        : 'border-slate-800/90 hover:border-slate-700'
-    } flex flex-col items-center justify-between p-3.5 shadow-2xl transition-all duration-150 overflow-hidden group select-none">
+        ? 'border-emerald-500 ring-2 ring-emerald-500/30 shadow-lg shadow-emerald-500/10'
+        : 'border-slate-800 hover:border-slate-700/80'
+    } flex flex-col items-center justify-between p-3 transition-all duration-150 overflow-hidden select-none">
       
       <!-- Górne plakietki statusu -->
       <div class="w-full flex items-center justify-between pointer-events-none z-10">
         <div>
-          ${card.hand_raised ? `<div class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-bounce">✋ Pomoc</div>` : ''}
+          ${card.hand_raised ? `
+            <div class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow-sm border border-amber-400/30">
+              <svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
+              <span>Zgłoszenie</span>
+            </div>` : ''}
         </div>
         <div>
-          ${card.is_speaking ? `<div class="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-pulse"><span class="w-1.5 h-1.5 rounded-full bg-white"></span>Mówi</div>` : ''}
+          ${card.is_speaking ? `
+            <div class="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1.5 shadow-sm border border-emerald-400/30">
+              <span class="flex items-center gap-0.5 h-2">
+                <span class="w-0.5 h-1.5 bg-white rounded-full animate-pulse"></span>
+                <span class="w-0.5 h-2.5 bg-white rounded-full animate-pulse delay-75"></span>
+                <span class="w-0.5 h-2 bg-white rounded-full animate-pulse delay-150"></span>
+              </span>
+              <span>Mówi</span>
+            </div>` : ''}
         </div>
       </div>
 
-      <!-- Awatar -->
+      <!-- Awatar - Monogram Inicjałów -->
       <div class="relative flex items-center justify-center my-auto">
-        ${card.is_speaking ? `<div class="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60 pointer-events-none"></div>` : ''}
-        <div class="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-slate-800 border-2 ${card.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/20' : 'border-slate-700'} flex items-center justify-center text-3xl sm:text-4xl shadow-xl transition-transform duration-150 group-hover:scale-105">
-          ${card.emoji}
+        <div class="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl bg-gradient-to-br ${pal.bg} border ${card.is_speaking ? 'border-emerald-400 shadow-emerald-500/20 shadow-lg' : 'border-white/10'} flex items-center justify-center text-white text-xl sm:text-2xl font-bold tracking-wider shadow-md transition-transform duration-150">
+          ${card.initials}
         </div>
       </div>
 
       <!-- Pigułka z imieniem i ikoną mikrofonu -->
-      <div class="bg-black/70 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 max-w-[90%] shadow-md">
-        <span class="text-xs font-bold text-slate-100 truncate">${card.is_self ? `Ty (${card.name})` : card.name}</span>
+      <div class="bg-slate-900/90 backdrop-blur-md px-3 py-1 rounded-xl border border-slate-700/60 flex items-center gap-2 max-w-[90%] shadow-sm">
+        <span class="text-xs font-semibold text-slate-100 truncate">${card.is_self ? `Ty (${card.name})` : card.name}</span>
         ${card.is_muted
-          ? `<span class="text-xs text-red-400" title="Wyciszony">🔇</span>`
+          ? `<svg class="w-3.5 h-3.5 text-red-400 flex-shrink-0 fill-current" viewBox="0 0 24 24" title="Wyciszony"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.14 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>`
           : card.is_speaking
-          ? `<span class="text-xs text-emerald-400 animate-pulse" title="Mówi">🔊</span>`
-          : `<span class="text-[11px] text-slate-400" title="Mikrofon aktywny">🎤</span>`}
+          ? `<svg class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0 fill-current" viewBox="0 0 24 24" title="Mówi"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7z"/></svg>`
+          : `<svg class="w-3.5 h-3.5 text-slate-400 flex-shrink-0 fill-current" viewBox="0 0 24 24" title="Mikrofon aktywny"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.49 6-3.31 6-6.72h-1.7z"/></svg>`}
       </div>
 
     </div>
@@ -506,13 +588,13 @@ function renderSkypeGrid(data) {
   if (!grid) return;
 
   const rawSelfName = (localStorage.getItem('voip_username') || 'Uczeń').trim();
-  const selfAvatar = getAvatarEmoji(selectedAvatarId);
   const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
 
   // 1. Uczestnik "Ty"
   const selfCard = {
     name: rawSelfName,
-    emoji: selfAvatar,
+    initials: getInitials(rawSelfName),
+    palette: getPalette(selectedAvatarId),
     is_speaking: data.is_speaking && !data.is_self_muted && !data.is_muted_by_teacher,
     is_muted: data.is_self_muted || data.is_muted_by_teacher,
     is_self: true,
@@ -526,7 +608,8 @@ function renderSkypeGrid(data) {
       const parsed = parseUserAvatarAndName(m.name);
       return {
         name: parsed.name,
-        emoji: parsed.emoji,
+        initials: parsed.initials,
+        palette: getDeterministicPalette(parsed.name),
         is_speaking: m.is_speaking,
         is_muted: data.is_muted_by_teacher,
         is_self: false,
@@ -534,62 +617,45 @@ function renderSkypeGrid(data) {
       };
     });
 
-  // Jeżeli jesteśmy w Poczekalni
+  const allCards = [selfCard, ...otherMembers];
+
+  const waitingCardHtml = (title, desc) => `
+    <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-2xl border border-dashed border-slate-700/80 bg-slate-900/40 flex flex-col items-center justify-center p-4 text-center">
+      <div class="w-11 h-11 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-400 mb-2.5 shadow-sm">
+        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 3s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+      </div>
+      <span class="text-xs font-bold text-slate-200 mb-0.5">${title}</span>
+      <span class="text-[11px] text-slate-400 leading-snug">${desc}</span>
+    </div>
+  `;
+
   if (!isRoom) {
-    grid.className = 'w-full h-full flex flex-col items-center justify-center max-w-sm mx-auto text-center';
-    grid.innerHTML = `
-      <div class="relative w-full aspect-[4/3] max-h-[250px] rounded-3xl bg-slate-900/90 border-2 ${
-        selfCard.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/30 shadow-xl shadow-emerald-500/20' : 'border-slate-800'
-      } flex flex-col items-center justify-between p-4 shadow-2xl transition-all duration-200 overflow-hidden group">
-        
-        <div class="w-full flex items-center justify-between pointer-events-none z-10">
-          <div>
-            ${selfCard.hand_raised ? `<div class="bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-bounce">✋ Prosisz o pomoc</div>` : ''}
-          </div>
-          <div>
-            ${selfCard.is_speaking ? `<div class="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow animate-pulse"><span class="w-1.5 h-1.5 rounded-full bg-white"></span>Mówisz</div>` : ''}
-          </div>
-        </div>
-
-        <div class="relative flex items-center justify-center my-auto">
-          ${selfCard.is_speaking ? `<div class="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60"></div>` : ''}
-          <div class="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-slate-800 border-2 ${selfCard.is_speaking ? 'border-emerald-400 ring-4 ring-emerald-500/20' : 'border-slate-700'} flex items-center justify-center text-4xl sm:text-5xl shadow-xl transition-transform duration-150 group-hover:scale-105">
-            ${selfCard.emoji}
-          </div>
-        </div>
-
-        <div class="bg-black/70 backdrop-blur-md px-3.5 py-1.5 rounded-xl border border-white/10 flex items-center gap-2 max-w-[90%] shadow-md">
-          <span class="text-xs font-bold text-white truncate">Ty (${selfCard.name})</span>
-          ${selfCard.is_muted
-            ? `<span class="text-xs text-red-400" title="Wyciszony">🔇</span>`
-            : selfCard.is_speaking
-            ? `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>`
-            : `<span class="text-[11px] text-slate-400">🎤</span>`}
-        </div>
-      </div>
-
-      <div class="mt-3 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 text-slate-400 text-xs">
-        <span class="text-amber-400 font-bold block mb-0.5">🟡 Poczekalnia lekcyjna</span>
-        <span>Czekasz na przydział do pokoju. Gdy nauczyciel dołączy Cię do pary lub grupy, natychmiast połączysz się z drugą osobą.</span>
-      </div>
-    `;
+    // Widok Skype w Poczekalni
+    if (allCards.length === 1) {
+      grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
+      grid.innerHTML = `
+        ${renderParticipantCardHtml(selfCard)}
+        ${waitingCardHtml('Poczekalnia lekcyjna', 'Oczekujesz na przydział do pokoju przez nauczyciela.')}
+      `;
+    } else if (allCards.length === 2) {
+      grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
+      grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+    } else if (allCards.length <= 4) {
+      grid.className = 'w-full h-full grid grid-cols-2 gap-3 items-center justify-center max-w-xl mx-auto';
+      grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+    } else {
+      grid.className = 'w-full h-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 items-center justify-center max-w-3xl mx-auto';
+      grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
+    }
     return;
   }
 
-  // Jesteśmy w pokoju roboczym (np. Pokój 1)
-  const allCards = [selfCard, ...otherMembers];
-
+  // Jesteśmy w pokoju roboczym
   if (allCards.length === 1) {
     grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
     grid.innerHTML = `
       ${renderParticipantCardHtml(selfCard)}
-      <div class="relative w-full aspect-[4/3] max-h-[220px] rounded-3xl border-2 border-dashed border-slate-700/80 bg-slate-900/40 flex flex-col items-center justify-center p-4 text-center text-slate-400">
-        <div class="w-14 h-14 rounded-full bg-slate-800/60 border border-slate-700/60 flex items-center justify-center text-2xl mb-2 text-slate-500 animate-pulse">
-          ⏳
-        </div>
-        <span class="text-xs font-bold text-slate-300 mb-0.5">Oczekiwanie na partnera</span>
-        <span class="text-[11px] text-slate-500 leading-snug">Gdy nauczyciel dołączy drugą osobę, jej kafelek pojawi się tutaj.</span>
-      </div>
+      ${waitingCardHtml('Oczekiwanie na partnera', 'Gdy nauczyciel dołączy kolejną osobę do pokoju, jej stanowisko pojawi się tutaj.')}
     `;
   } else if (allCards.length === 2) {
     grid.className = 'w-full h-full grid grid-cols-1 sm:grid-cols-2 gap-3.5 items-center justify-center max-w-xl mx-auto';
@@ -598,56 +664,12 @@ function renderSkypeGrid(data) {
     grid.className = 'w-full h-full grid grid-cols-2 gap-3 items-center justify-center max-w-xl mx-auto';
     grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
   } else {
-    grid.className = 'w-full h-full grid grid-cols-2 sm:grid-cols-3 gap-2.5 items-center justify-center max-w-2xl mx-auto';
+    grid.className = 'w-full h-full grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 items-center justify-center max-w-3xl mx-auto';
     grid.innerHTML = allCards.map(renderParticipantCardHtml).join('');
   }
 }
 
-let isHandRaised = false;
 
-function raiseHand() {
-  const tauri = getTauri();
-  isHandRaised = !isHandRaised;
-  if (tauri && tauri.invoke) {
-    if (isHandRaised) {
-      tauri.invoke('raise_hand').catch(() => {});
-    }
-  }
-
-  // Przycisk w Poczekalni
-  const lobbyBtn = document.getElementById('raise-hand-btn');
-  if (lobbyBtn) {
-    if (isHandRaised) {
-      lobbyBtn.innerHTML = `
-        <svg class="w-5 h-5 fill-current animate-bounce" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-        <span class="text-xs font-bold uppercase tracking-wide">Zgłoszono do nauczyciela! (Kliknij, aby cofnąć)</span>
-      `;
-      lobbyBtn.className = 'w-full bg-[#16a34a] hover:bg-[#15803d] active:scale-[0.98] text-white font-bold py-3.5 px-4 rounded-2xl shadow-sm flex items-center justify-center gap-2.5 transition-all duration-150 cursor-pointer';
-    } else {
-      lobbyBtn.innerHTML = `
-        <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24">
-          <path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/>
-        </svg>
-        <span class="text-xs font-bold tracking-wide uppercase">Poproś o pomoc nauczyciela</span>
-      `;
-      lobbyBtn.className = 'w-full bg-[#1e3a5f] hover:bg-[#152843] active:scale-[0.98] text-white font-bold py-3.5 px-4 rounded-2xl shadow-sm flex items-center justify-center gap-2.5 transition-all duration-150 cursor-pointer';
-    }
-  }
-
-  // Przycisk w doku Skype
-  const skypeHandBtn = document.getElementById('skype-raise-hand-btn');
-  if (skypeHandBtn) {
-    if (isHandRaised) {
-      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 ring-4 ring-amber-400/40 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-pulse';
-      skypeHandBtn.title = 'Pomoc wezwana (kliknij, aby cofnąć)';
-      showToast('Zgłoszono prośbę o pomoc do nauczyciela', 'info');
-    } else {
-      skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
-      skypeHandBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
-      showToast('Cofnięto prośbę o pomoc', 'info');
-    }
-  }
-}
 
 function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false) {
   const micIconBox = document.getElementById('mic-icon-box');
@@ -690,22 +712,22 @@ function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false)
     if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center transition-all duration-200 shadow-sm';
     if (micStatusLabel) {
       micStatusLabel.innerText = 'Mówisz teraz (Aktywny)';
-      micStatusLabel.className = 'text-xs font-bold text-emerald-700';
+      micStatusLabel.className = 'text-xs font-bold text-emerald-400';
     }
     if (bars[0]) bars[0].className = 'w-1 h-3.5 bg-emerald-500 rounded-full animate-pulse';
     if (bars[1]) bars[1].className = 'w-1 h-5 bg-emerald-500 rounded-full animate-pulse delay-75';
     if (bars[2]) bars[2].className = 'w-1 h-4 bg-emerald-500 rounded-full animate-pulse delay-150';
-    if (bars[3]) bars[3].className = 'w-1 h-3 bg-purple-500 rounded-full animate-pulse delay-100';
+    if (bars[3]) bars[3].className = 'w-1 h-3 bg-emerald-500 rounded-full animate-pulse delay-100';
   } else {
-    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center transition-all duration-200';
+    if (micIconBox) micIconBox.className = 'w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 flex items-center justify-center transition-all duration-200';
     if (micStatusLabel) {
       micStatusLabel.innerText = 'Czuwanie (VAD)';
-      micStatusLabel.className = 'text-xs font-bold text-slate-700';
+      micStatusLabel.className = 'text-xs font-bold text-sky-200';
     }
-    if (bars[0]) bars[0].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[1]) bars[1].className = 'w-1 h-3 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[2]) bars[2].className = 'w-1 h-4 bg-slate-300 rounded-full transition-all duration-150';
-    if (bars[3]) bars[3].className = 'w-1 h-2 bg-slate-300 rounded-full transition-all duration-150';
+    if (bars[0]) bars[0].className = 'w-1 h-2 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[1]) bars[1].className = 'w-1 h-3 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[2]) bars[2].className = 'w-1 h-4 bg-slate-600 rounded-full transition-all duration-150';
+    if (bars[3]) bars[3].className = 'w-1 h-2 bg-slate-600 rounded-full transition-all duration-150';
   }
 }
 async function toggleSelfMute() {
@@ -722,13 +744,11 @@ async function toggleSelfMute() {
           iconUnmuted.classList.add('hidden');
           iconMuted.classList.remove('hidden');
           muteBtn.title = 'Mikrofon wyciszony (kliknij, aby włączyć)';
-          showToast('Wyciszono mikrofon', 'info');
         } else {
           muteBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition shadow-md cursor-pointer';
           iconUnmuted.classList.remove('hidden');
           iconMuted.classList.add('hidden');
           muteBtn.title = 'Wycisz mikrofon';
-          showToast('Mikrofon aktywny', 'success');
         }
       }
     } catch (e) {
@@ -763,13 +783,14 @@ async function handleHangupClick() {
 function applyClientStatus(data) {
   if (!data) return;
 
+  const isJoined = data.is_joined !== undefined ? data.is_joined : isJoinedState;
   const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
   const groupDisplay = isRoom ? data.group : 'Poczekalnia';
 
   const viewLobby = document.getElementById('view-lobby');
   const viewSkype = document.getElementById('view-skype-call');
 
-  if (isRoom) {
+  if (isJoined) {
     if (viewLobby) viewLobby.classList.add('hidden');
     if (viewSkype) viewSkype.classList.remove('hidden');
   } else {
@@ -794,7 +815,7 @@ function applyClientStatus(data) {
   const statusDot = document.getElementById('status-dot');
   if (data.connected) {
     if (badge) {
-      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span>Połączono</span>';
+      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span>Wykryto serwer</span>';
       badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200';
     }
     if (statusDot) statusDot.className = 'absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white shadow-sm';
@@ -832,7 +853,7 @@ function applyClientStatus(data) {
       : 'w-2 h-2 rounded-full bg-amber-500 animate-pulse';
   }
 
-  const membersCount = isRoom ? Math.max(1, (data.room_members || []).length) : 1;
+  const membersCount = Math.max(1, (data.room_members || []).length);
   if (countBadge) countBadge.innerText = membersCount === 1 ? '1 uczestnik' : `${membersCount} uczestników`;
 
   const selfAvatarPreview = document.getElementById('skype-self-avatar-preview');
@@ -870,11 +891,11 @@ function applyClientStatus(data) {
 
   if (lastAssignedGroup !== null && lastAssignedGroup !== data.group) {
     if (isRoom) showToast(`Przydzielono Cię do: ${data.group}`, 'success');
-    else showToast('Przeniesiono Cię do Poczekalni', 'info');
+    else if (isJoined) showToast('Przeniesiono Cię do Poczekalni', 'info');
   }
   lastAssignedGroup = data.group;
 
-  if (isRoom) {
+  if (isJoined) {
     renderSkypeGrid(data);
   }
 
@@ -882,35 +903,59 @@ function applyClientStatus(data) {
     updateSettingsMicMeter(data.mic_level);
   }
 
-  const micTestBtn = document.getElementById('settings-test-mic-btn');
-  const micTestText = document.getElementById('settings-test-mic-text');
-  if (micTestBtn && micTestText && !micTestBtn.disabled) {
-    const phase = data.mic_test_phase || (data.is_mic_test_active ? 'recording' : 'idle');
-    const countdown = Math.ceil(data.mic_test_countdown || 0);
+  if (data.agc_enabled !== undefined) {
+    const agcCheckbox = document.getElementById('settings-agc-checkbox');
+    if (agcCheckbox && document.activeElement !== agcCheckbox) {
+      agcCheckbox.checked = !!data.agc_enabled;
+    }
+  }
 
-    if (phase === 'recording') {
-      micTestBtn.className = 'mt-2.5 w-full bg-red-100 hover:bg-red-200 text-red-900 border-2 border-red-500 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md animate-pulse';
-      micTestText.innerText = `🔴 Mów do mikrofonu (${countdown > 0 ? countdown : 5}s)...`;
-    } else if (phase === 'playing') {
-      micTestBtn.className = 'mt-2.5 w-full bg-emerald-100 hover:bg-emerald-200 text-emerald-950 border-2 border-emerald-500 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md';
-      micTestText.innerText = `🔊 Odsłuch w słuchawkach (${countdown > 0 ? countdown : 5}s)...`;
-    } else {
-      if (micTestBtn.dataset.prevPhase && micTestBtn.dataset.prevPhase !== 'idle') {
-        micTestBtn.className = 'mt-2.5 w-full bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
-        micTestText.innerText = '✅ Test zakończony pomyślnie!';
-        setTimeout(() => {
-          if (!micTestBtn.dataset.prevPhase || micTestBtn.dataset.prevPhase === 'idle') {
-            micTestBtn.className = 'mt-2.5 w-full bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 active:scale-[0.98] font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
-            micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
-          }
-        }, 2200);
-      } else if (!micTestBtn.dataset.prevPhase || micTestBtn.dataset.prevPhase === 'idle') {
-        micTestBtn.className = 'mt-2.5 w-full bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-300 active:scale-[0.98] font-bold py-2.5 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
-        micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
+  if (data.hand_raised !== undefined && data.hand_raised !== isHandRaised) {
+    isHandRaised = data.hand_raised;
+    const skypeHandBtn = document.getElementById('skype-raise-hand-btn');
+    if (skypeHandBtn) {
+      if (isHandRaised) {
+        skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-amber-500 hover:bg-amber-600 ring-4 ring-amber-400/40 text-white flex items-center justify-center transition shadow-lg shadow-amber-500/30 cursor-pointer animate-pulse';
+        skypeHandBtn.title = 'Ręka podniesiona (kliknij, aby odwołać)';
+      } else {
+        skypeHandBtn.className = 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center transition shadow-md cursor-pointer';
+        skypeHandBtn.title = 'Poproś nauczyciela o pomoc (Podnieś rękę)';
       }
     }
-    micTestBtn.dataset.prevPhase = phase;
   }
+
+  const phase = data.mic_test_phase || (data.is_mic_test_active ? 'recording' : 'idle');
+  const countdown = Math.ceil(data.mic_test_countdown || 0);
+  updateMicTestButtons(phase, countdown);
+}
+
+let currentMicTestPhase = 'idle';
+
+function updateMicTestButtons(phase, countdown) {
+  currentMicTestPhase = phase;
+  const buttons = [
+    { btn: document.getElementById('settings-test-mic-btn'), text: document.getElementById('settings-test-mic-text') },
+    { btn: document.getElementById('lobby-test-mic-btn'), text: document.getElementById('lobby-test-mic-text') }
+  ];
+
+  buttons.forEach(({ btn, text }) => {
+    if (!btn || !text) return;
+    const svg = btn.querySelector('svg');
+    btn.dataset.prevPhase = phase;
+    if (phase === 'recording') {
+      btn.className = 'mt-2 w-full bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-500 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md';
+      if (svg) svg.classList.add('hidden');
+      text.innerHTML = `<span class="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block mr-1"></span>Nagrywanie głosu (${countdown > 0 ? countdown : 5}s)...`;
+    } else if (phase === 'playing') {
+      btn.className = 'mt-2 w-full bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border border-emerald-500 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-md';
+      if (svg) svg.classList.add('hidden');
+      text.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse inline-block mr-1"></span>Odsłuch w słuchawkach (${countdown > 0 ? countdown : 5}s)...`;
+    } else {
+      btn.className = 'mt-2 w-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 active:scale-[0.98] font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-sm';
+      if (svg) svg.classList.remove('hidden');
+      text.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
+    }
+  });
 }
 
 async function initClientListener() {
@@ -924,10 +969,8 @@ async function initClientListener() {
 
   initSavedAudioSettings();
 
-  const savedServerIp = (localStorage.getItem('voip_manual_server_ip') || '').trim();
-  if (savedServerIp && tauri && tauri.invoke) {
-    tauri.invoke('set_server_ip', { ip: savedServerIp }).catch(() => {});
-  }
+  // Serwer pracowni jest wykrywany wyłącznie automatycznie (mDNS / UDP broadcast)
+  localStorage.removeItem('voip_manual_server_ip');
 
   // 1. Zdarzenie czasu rzeczywistego (push)
   if (tauri.listen) {
@@ -956,12 +999,17 @@ async function initClientListener() {
 let isTestingAudioOutput = false;
 
 function updateSettingsMicMeter(level) {
+  const pct = Math.min(100, Math.round((level || 0) * 100));
+
   const bar = document.getElementById('settings-mic-level-bar');
   const pctLabel = document.getElementById('settings-mic-pct');
-  if (!bar) return;
-  const pct = Math.min(100, Math.round((level || 0) * 100));
-  bar.style.width = `${pct}%`;
+  if (bar) bar.style.width = `${pct}%`;
   if (pctLabel) pctLabel.innerText = `${pct}%`;
+
+  const lobbyBar = document.getElementById('lobby-mic-level-bar');
+  const lobbyPct = document.getElementById('lobby-mic-pct');
+  if (lobbyBar) lobbyBar.style.width = `${pct}%`;
+  if (lobbyPct) lobbyPct.innerText = `${pct}%`;
 }
 
 let audioDevicePollInterval = null;
@@ -969,10 +1017,14 @@ let audioDevicePollInterval = null;
 async function openSettingsModal() {
   document.getElementById('settings-modal')?.classList.remove('hidden');
   await loadAudioDevices();
-  await loadServerSettings();
   const savedVad = localStorage.getItem('voip_vad_threshold');
   if (savedVad !== null) {
     handleVadThresholdChange(savedVad);
+  }
+  const savedAgc = localStorage.getItem('voip_agc_enabled');
+  const agcCheckbox = document.getElementById('settings-agc-checkbox');
+  if (agcCheckbox) {
+    agcCheckbox.checked = savedAgc !== null ? savedAgc === 'true' : true;
   }
   if (audioDevicePollInterval) clearInterval(audioDevicePollInterval);
   audioDevicePollInterval = setInterval(loadAudioDevices, 1500);
@@ -984,47 +1036,8 @@ function closeSettingsModal() {
     clearInterval(audioDevicePollInterval);
     audioDevicePollInterval = null;
   }
-  if (isTestingMicLoopback) {
+  if (currentMicTestPhase === 'recording' || currentMicTestPhase === 'playing') {
     testMicLoopback();
-  }
-}
-
-async function loadServerSettings() {
-  const input = document.getElementById('settings-server-ip-input');
-  if (!input) return;
-  const saved = localStorage.getItem('voip_manual_server_ip') || '';
-  input.value = saved;
-}
-
-async function saveServerIpSetting() {
-  const input = document.getElementById('settings-server-ip-input');
-  const ip = (input?.value || '').trim();
-  const tauri = getTauri();
-  if (!tauri || !tauri.invoke) return;
-
-  try {
-    const res = await tauri.invoke('set_server_ip', { ip });
-    if (ip && ip.toLowerCase() !== 'auto') {
-      localStorage.setItem('voip_manual_server_ip', ip);
-    } else {
-      localStorage.removeItem('voip_manual_server_ip');
-    }
-    showToast(res, 'success');
-  } catch (err) {
-    showToast(`Błąd: ${err.message || err}`, 'error');
-  }
-}
-
-async function resetServerIpToAuto() {
-  const input = document.getElementById('settings-server-ip-input');
-  if (input) input.value = '';
-  localStorage.removeItem('voip_manual_server_ip');
-  const tauri = getTauri();
-  if (tauri && tauri.invoke) {
-    try {
-      const res = await tauri.invoke('set_server_ip', { ip: 'auto' });
-      showToast(res, 'info');
-    } catch (e) {}
   }
 }
 
@@ -1045,13 +1058,13 @@ async function loadAudioDevices() {
 
     if (inputSelect) {
       if (!devices.input_devices || devices.input_devices.length === 0) {
-        inputSelect.innerHTML = '<option value="" disabled selected>⚠️ Brak podłączonego mikrofonu</option>';
+        inputSelect.innerHTML = '<option value="" disabled selected>Brak podłączonego mikrofonu</option>';
         inputSelect.dataset.renderedDevices = 'empty';
         if (micWarning) micWarning.classList.remove('hidden');
         if (micTestBtn) {
           micTestBtn.disabled = true;
           micTestBtn.classList.add('opacity-50', 'cursor-not-allowed');
-          if (!isTestingMicLoopback && micTestText) {
+          if (currentMicTestPhase === 'idle' && micTestText) {
             micTestText.innerText = 'Podłącz mikrofon, aby przetestować';
           }
         }
@@ -1060,7 +1073,7 @@ async function loadAudioDevices() {
         if (micTestBtn) {
           micTestBtn.disabled = false;
           micTestBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-          if (!isTestingMicLoopback && micTestText) {
+          if (currentMicTestPhase === 'idle' && micTestText) {
             micTestText.innerText = 'Testuj mikrofon (5s nagranie i odsłuch)';
           }
         }
@@ -1121,10 +1134,7 @@ async function testMicLoopback() {
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
 
-  const btn = document.getElementById('settings-test-mic-btn');
-  const currentPhase = btn?.dataset?.prevPhase || 'idle';
-
-  if (currentPhase === 'recording' || currentPhase === 'playing') {
+  if (currentMicTestPhase === 'recording' || currentMicTestPhase === 'playing') {
     try {
       await tauri.invoke('stop_mic_test');
     } catch (e) {
@@ -1134,7 +1144,7 @@ async function testMicLoopback() {
   }
 
   try {
-    await tauri.invoke('start_mic_test', { durationSecs: 5.0 });
+    await tauri.invoke('start_mic_test', { durationSecs: 5.0, duration_secs: 5.0 });
   } catch (err) {
     console.error('Błąd start_mic_test:', err);
     showToast('Nie udało się uruchomić testu mikrofonu', 'error');
@@ -1154,7 +1164,7 @@ async function testAudioOutput() {
     btn.classList.replace('bg-sky-50', 'bg-emerald-100');
     btn.classList.replace('text-sky-800', 'text-emerald-900');
     btn.classList.replace('border-sky-200', 'border-emerald-300');
-    text.innerText = '🎵 Odtwarzanie dźwięku testowego...';
+    text.innerText = 'Odtwarzanie dźwięku testowego...';
   }
 
   try {
@@ -1207,6 +1217,16 @@ function handleVadThresholdChange(val) {
   }
 }
 
+function handleAgcToggle(enabled) {
+  const agcCheckbox = document.getElementById('settings-agc-checkbox');
+  if (agcCheckbox) agcCheckbox.checked = !!enabled;
+  localStorage.setItem('voip_agc_enabled', enabled ? 'true' : 'false');
+  const tauri = getTauri();
+  if (tauri && tauri.invoke) {
+    tauri.invoke('set_agc_enabled', { enabled: !!enabled }).catch(console.error);
+  }
+}
+
 async function initSavedAudioSettings() {
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
@@ -1218,10 +1238,6 @@ async function initSavedAudioSettings() {
   if (savedOutput) {
     tauri.invoke('set_output_device', { deviceName: savedOutput }).catch(console.error);
   }
-  const savedServerIp = localStorage.getItem('voip_manual_server_ip');
-  if (savedServerIp) {
-    tauri.invoke('set_server_ip', { ip: savedServerIp }).catch(console.error);
-  }
 
   const savedVol = localStorage.getItem('voip_client_volume');
   if (savedVol !== null) {
@@ -1231,6 +1247,13 @@ async function initSavedAudioSettings() {
   const savedVad = localStorage.getItem('voip_vad_threshold');
   if (savedVad !== null) {
     handleVadThresholdChange(savedVad);
+  }
+
+  const savedAgc = localStorage.getItem('voip_agc_enabled');
+  if (savedAgc !== null) {
+    handleAgcToggle(savedAgc === 'true');
+  } else {
+    handleAgcToggle(true);
   }
 }
 
@@ -1248,25 +1271,40 @@ function showToast(message, type = 'info') {
 
   const toast = document.createElement('div');
   let bgClass = 'bg-slate-900/95 border-slate-700 text-white';
-  let icon = '🚀';
+  let icon = `
+    <svg class="w-4 h-4 text-sky-400 fill-current" viewBox="0 0 24 24">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+    </svg>`;
 
   if (type === 'success') {
-    bgClass = 'bg-emerald-950/95 border-emerald-500/60 text-emerald-100 shadow-emerald-950/50';
-    icon = '✅';
+    bgClass = 'bg-slate-900/95 border-emerald-500/50 text-emerald-100 shadow-emerald-950/40';
+    icon = `
+      <svg class="w-4 h-4 text-emerald-400 fill-current" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+      </svg>`;
   } else if (type === 'warning') {
-    bgClass = 'bg-amber-950/95 border-amber-500/60 text-amber-100 shadow-amber-950/50';
-    icon = '⚠️';
+    bgClass = 'bg-slate-900/95 border-amber-500/50 text-amber-100 shadow-amber-950/40';
+    icon = `
+      <svg class="w-4 h-4 text-amber-400 fill-current" viewBox="0 0 24 24">
+        <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+      </svg>`;
   } else if (type === 'error') {
-    bgClass = 'bg-red-950/95 border-red-500/60 text-red-100 shadow-red-950/50';
-    icon = '❌';
+    bgClass = 'bg-slate-900/95 border-red-500/50 text-red-100 shadow-red-950/40';
+    icon = `
+      <svg class="w-4 h-4 text-red-400 fill-current" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>`;
   } else if (type === 'info') {
-    bgClass = 'bg-sky-950/95 border-sky-500/60 text-sky-100 shadow-sky-950/50';
-    icon = 'ℹ️';
+    bgClass = 'bg-slate-900/95 border-sky-500/50 text-sky-100 shadow-sky-950/40';
+    icon = `
+      <svg class="w-4 h-4 text-sky-400 fill-current" viewBox="0 0 24 24">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+      </svg>`;
   }
 
-  toast.className = `flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl border shadow-xl backdrop-blur-md text-xs font-semibold transform transition-all duration-300 pointer-events-auto opacity-0 translate-y-3 ${bgClass}`;
+  toast.className = `flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border shadow-xl backdrop-blur-md text-xs font-semibold transform transition-all duration-300 pointer-events-auto opacity-0 translate-y-3 ${bgClass}`;
   toast.innerHTML = `
-    <span class="text-sm flex-shrink-0">${icon}</span>
+    <span class="flex-shrink-0 flex items-center justify-center">${icon}</span>
     <span class="flex-1">${message}</span>
   `;
 
@@ -1328,7 +1366,12 @@ async function checkForAppUpdate(manual = false) {
     console.warn('Sprawdzanie aktualizacji w tle:', err);
     if (manual) {
       const curVer = await tauri.invoke('get_app_version').catch(() => '1.0.0');
-      showToast(`Aktualna wersja: v${curVer} (Brak połączenia z serwerem aktualizacji GitHub)`, 'warning');
+      const errStr = String(err?.message || err || '');
+      let reason = 'Brak połączenia z serwerem aktualizacji GitHub';
+      if (errStr.includes('404') || errStr.toLowerCase().includes('not found')) {
+        reason = 'Brak opublikowanych wydań na GitHub lub repozytorium jest prywatne';
+      }
+      showToast(`Wersja: v${curVer} (${reason})`, 'warning');
     }
   }
 }
@@ -1346,34 +1389,118 @@ function dismissUpdateToast() {
   document.getElementById('update-notification-toast')?.classList.add('hidden');
 }
 
+function openUpdateProgressModal(version) {
+  dismissUpdateToast();
+  const modal = document.getElementById('update-progress-modal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+
+  const title = document.getElementById('update-progress-title');
+  const subtitle = document.getElementById('update-progress-subtitle');
+  const progressBar = document.getElementById('update-progress-bar');
+  const pctElem = document.getElementById('update-progress-pct');
+  const statusElem = document.getElementById('update-progress-status');
+  const errorBox = document.getElementById('update-progress-error-box');
+  const iconDownload = document.getElementById('update-progress-icon-download');
+  const iconSpinner = document.getElementById('update-progress-icon-spinner');
+
+  if (title) title.innerText = 'Pobieranie aktualizacji...';
+  if (subtitle) subtitle.innerText = version ? `Przygotowywanie nowej wersji v${version}` : 'Przygotowywanie nowej wersji programu';
+  if (progressBar) {
+    progressBar.style.width = '0%';
+    progressBar.className = 'h-full bg-gradient-to-r from-blue-600 to-emerald-500 rounded-full transition-all duration-150';
+  }
+  if (pctElem) pctElem.innerText = '0%';
+  if (statusElem) statusElem.innerText = 'Nawiązywanie połączenia...';
+  if (errorBox) errorBox.classList.add('hidden');
+  if (iconDownload) iconDownload.classList.remove('hidden');
+  if (iconSpinner) iconSpinner.classList.add('hidden');
+}
+
+function closeUpdateProgressModal() {
+  const modal = document.getElementById('update-progress-modal');
+  if (modal) modal.classList.add('hidden');
+  isUpdatingClientApp = false;
+  const btn = document.getElementById('btn-install-tauri-update');
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span>Aktualizuj teraz</span>';
+  }
+}
+
+function initClientUpdateListeners() {
+  const tauri = getTauri();
+  if (!tauri || !tauri.listen) return;
+
+  tauri.listen('update-download-progress', (event) => {
+    const payload = event.payload;
+    if (!payload) return;
+    const downloaded = payload.downloaded || 0;
+    const total = payload.total || 0;
+
+    const modal = document.getElementById('update-progress-modal');
+    if (modal) modal.classList.remove('hidden');
+
+    const progressBar = document.getElementById('update-progress-bar');
+    const pctElem = document.getElementById('update-progress-pct');
+    const statusElem = document.getElementById('update-progress-status');
+
+    if (total > 0) {
+      const pct = Math.min(100, Math.round((downloaded / total) * 100));
+      if (progressBar) progressBar.style.width = `${pct}%`;
+      if (pctElem) pctElem.innerText = `${pct}%`;
+      const dlMb = (downloaded / (1024 * 1024)).toFixed(1);
+      const totalMb = (total / (1024 * 1024)).toFixed(1);
+      if (statusElem) statusElem.innerText = `${dlMb} MB / ${totalMb} MB`;
+    } else {
+      const dlMb = (downloaded / (1024 * 1024)).toFixed(1);
+      if (progressBar) progressBar.style.width = '60%';
+      if (statusElem) statusElem.innerText = `Pobrano: ${dlMb} MB`;
+    }
+  });
+
+  tauri.listen('update-installing', () => {
+    const title = document.getElementById('update-progress-title');
+    const subtitle = document.getElementById('update-progress-subtitle');
+    const statusElem = document.getElementById('update-progress-status');
+    const pctElem = document.getElementById('update-progress-pct');
+    const progressBar = document.getElementById('update-progress-bar');
+    const iconDownload = document.getElementById('update-progress-icon-download');
+    const iconSpinner = document.getElementById('update-progress-icon-spinner');
+
+    if (title) title.innerText = 'Instalowanie aktualizacji...';
+    if (subtitle) subtitle.innerText = 'Weryfikacja podpisu cyfrowego i podmiana plików';
+    if (statusElem) statusElem.innerText = 'Instalowanie i restart...';
+    if (pctElem) pctElem.innerText = '100%';
+    if (progressBar) {
+      progressBar.style.width = '100%';
+      progressBar.className = 'h-full bg-emerald-500 rounded-full transition-all duration-150';
+    }
+    if (iconDownload) iconDownload.classList.add('hidden');
+    if (iconSpinner) iconSpinner.classList.remove('hidden');
+  });
+}
+
 async function applyTauriUpdate() {
   if (isUpdatingClientApp) return;
   const tauri = getTauri();
   if (!tauri || !tauri.invoke) return;
 
-  const btn = document.getElementById('btn-install-tauri-update');
   isUpdatingClientApp = true;
-
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = `
-      <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        <circle cx="12" cy="12" r="10" stroke-width="4" class="opacity-25"></circle>
-        <path fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" class="opacity-75"></path>
-      </svg>
-      <span>Pobieranie i restart...</span>
-    `;
-  }
+  openUpdateProgressModal(pendingClientTauriUpdate?.latest_version);
 
   try {
     await tauri.invoke('install_update');
   } catch (err) {
     console.error('Błąd instalacji aktualizacji:', err);
-    showToast(`Błąd aktualizacji: ${err}`, 'warning');
-    isUpdatingClientApp = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.innerText = 'Spróbuj ponownie';
+    const errorBox = document.getElementById('update-progress-error-box');
+    const errorMsg = document.getElementById('update-progress-error-msg');
+    if (errorBox && errorMsg) {
+      errorMsg.innerText = `${err}`;
+      errorBox.classList.remove('hidden');
+    } else {
+      showToast(`Błąd aktualizacji: ${err}`, 'warning');
+      closeUpdateProgressModal();
     }
   }
 }
@@ -1382,10 +1509,11 @@ window.addEventListener('DOMContentLoaded', () => {
   initClientListener();
   initClientAppVersion();
   initSavedAudioSettings();
-  // Sprawdź aktualizację automatycznie w tle po 3.5 sekundach od startu
+  initClientUpdateListeners();
+  // Sprawdź aktualizację automatycznie przy starcie aplikacji (600ms po zainicjowaniu widoku)
   setTimeout(() => {
     checkForAppUpdate(false);
-  }, 3500);
+  }, 600);
 });
 
 
