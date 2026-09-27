@@ -25,7 +25,3 @@ if-addrs = "0.13"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-
-[profile.release]
-panic = "abort"
-strip = true

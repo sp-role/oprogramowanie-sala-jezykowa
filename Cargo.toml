@@ -1,6 +1,10 @@
-﻿[workspace]
+[workspace]
 members = [
     "voip-client",
     "voip-server",
 ]
 resolver = "2"
+
+[profile.release]
+panic = "abort"
+strip = true
