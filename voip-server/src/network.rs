@@ -219,6 +219,12 @@ pub fn run_discovery_server(state: SharedServerState) {
                 } else if msg.starts_with("VOIP_PING") {
                     let reply_msg = format!("VOIP_PONG:{}:{}", reply_ip, PORT_AUDIO);
                     let _ = socket.send_to(reply_msg.as_bytes(), addr);
+                } else if msg.starts_with("VOIP_HAND_DOWN") {
+                    let ip = addr.ip().to_string();
+                    let mut st = state.lock().unwrap();
+                    if let Some(stat) = st.client_stats.get_mut(&ip) {
+                        stat.hand_raised = false;
+                    }
                 } else if msg.starts_with("VOIP_HAND") {
                     let ip = addr.ip().to_string();
                     let mut st = state.lock().unwrap();
@@ -269,11 +275,34 @@ pub fn run_mdns_server() {
 }
 
 pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now: f64) -> Vec<crate::state::RoomMemberPayload> {
-    if room == "Brak" || room.is_empty() {
+    if room.is_empty() {
         return vec![];
     }
+    if room == "Brak" {
+        let mut list: Vec<crate::state::RoomMemberPayload> = st
+            .client_stats
+            .iter()
+            .filter(|(ip, s)| {
+                (now - s.last_seen) < crate::state::CLIENT_TIMEOUT_SECS
+                    && st.ip_to_group.get(*ip).map(|g| g == "Brak").unwrap_or(true)
+            })
+            .map(|(ip, stat)| {
+                let name = st.ip_to_name.get(ip).cloned().unwrap_or_else(|| format!("Uczeń ({})", ip));
+                let is_speaking = (now - stat.last_spoken) < 0.6;
+                let hand_raised = stat.hand_raised;
+                crate::state::RoomMemberPayload {
+                    ip: ip.clone(),
+                    name,
+                    is_speaking,
+                    hand_raised,
+                }
+            })
+            .collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        return list;
+    }
     if let Some(members) = st.groups.get(room) {
-        members
+        let mut list: Vec<crate::state::RoomMemberPayload> = members
             .iter()
             .filter(|ip| {
                 // Wyklucz uczniów nieaktywnych (timeout powyżej 12 sekund)
@@ -294,7 +323,9 @@ pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now:
                     hand_raised,
                 }
             })
-            .collect()
+            .collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
     } else {
         vec![]
     }
@@ -330,7 +361,32 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
             let recv_time = current_time();
             let data = &buf[..size];
 
-            // Obsługa żądania opuszczenia pokoju przez ucznia (Rozłącz)
+            // Obsługa żądania opuszczenia pokoju lub całkowitego rozłączenia z serwerem
+            if size >= 15 && &data[..15] == b"VOIP_DISCONNECT" {
+                let mut st = state.lock().unwrap();
+                let old_room = st.ip_to_group.remove(&sender_ip).unwrap_or_else(|| "Brak".to_string());
+                if old_room != "Brak" {
+                    if let Some(members) = st.groups.get_mut(&old_room) {
+                        members.retain(|x| x != &sender_ip);
+                    }
+                    let rem_members = get_room_members_payload(&st, &old_room, recv_time);
+                    let rem_json = serde_json::to_string(&rem_members).unwrap_or_default();
+                    let rem_msg = format!("VOIP_ROOM:{}|{}", old_room, rem_json);
+                    if let Some(ips) = st.groups.get(&old_room) {
+                        for mem_ip in ips {
+                            if let Some(target) = st.ip_to_addr.get(mem_ip) {
+                                let _ = socket.send_to(rem_msg.as_bytes(), target);
+                            }
+                        }
+                    }
+                }
+                st.client_stats.remove(&sender_ip);
+                st.ip_to_name.remove(&sender_ip);
+                st.ip_to_addr.remove(&sender_ip);
+                let _ = socket.send_to(b"VOIP_ROOM:Brak|[]", addr);
+                continue;
+            }
+
             if size >= 10 && &data[..10] == b"VOIP_LEAVE" {
                 let mut st = state.lock().unwrap();
                 let old_room = st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string()).unwrap_or_else(|| "Brak".to_string());
@@ -385,10 +441,55 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
                 };
 
                 let is_new = !st.ip_to_group.contains_key(&sender_ip);
+                st.ip_to_name.insert(sender_ip.clone(), display_name.clone());
+                st.total_bytes_sec += size;
+
                 if is_new {
                     println!("[SERWER-AUDIO] Nowy uczeń zarejestrowany: {} ({})", display_name, sender_ip);
                     st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string());
-                    let _ = socket.send_to(b"VOIP_ROOM:Brak|[]", addr);
+                }
+
+                {
+                    let client_stat = st.client_stats.entry(sender_ip.clone()).or_insert(ClientStat {
+                        last_seq: seq_num,
+                        packets_recv: 0,
+                        packets_lost: 0,
+                        latencies: vec![],
+                        last_seen: recv_time,
+                        hand_raised: false,
+                        last_spoken: 0.0,
+                    });
+                    client_stat.last_seen = recv_time;
+                    client_stat.packets_recv += 1;
+
+                    if max_amp > 800 {
+                        client_stat.last_spoken = recv_time;
+                    }
+
+                    let latency = (recv_time - send_time) * 1000.0;
+                    if (0.0..2000.0).contains(&latency) {
+                        client_stat.latencies.push(latency);
+                        if client_stat.latencies.len() > 15 {
+                            client_stat.latencies.remove(0);
+                        }
+                    }
+                    if seq_num > client_stat.last_seq + 1 {
+                        client_stat.packets_lost += seq_num - client_stat.last_seq - 1;
+                    }
+                    client_stat.last_seq = seq_num;
+                }
+
+                if is_new {
+                    let members = get_room_members_payload(&st, "Brak", recv_time);
+                    let members_json = serde_json::to_string(&members).unwrap_or_default();
+                    let msg = format!("VOIP_ROOM:Brak|{}", members_json);
+                    let _ = socket.send_to(msg.as_bytes(), addr);
+                    let other_ips: Vec<String> = st.ip_to_group.iter().filter(|(k, v)| *v == "Brak" && *k != &sender_ip).map(|(k, _)| k.clone()).collect();
+                    for other_ip in other_ips {
+                        if let Some(target_addr) = st.ip_to_addr.get(&other_ip) {
+                            let _ = socket.send_to(msg.as_bytes(), target_addr);
+                        }
+                    }
                 } else if !has_audio {
                     let cur_room = st.ip_to_group.get(&sender_ip).cloned().unwrap_or_else(|| "Brak".to_string());
                     let members = get_room_members_payload(&st, &cur_room, recv_time);
@@ -396,37 +497,6 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
                     let pong = format!("VOIP_PONG:{}|{}", cur_room, members_json);
                     let _ = socket.send_to(pong.as_bytes(), addr);
                 }
-
-                st.ip_to_name.insert(sender_ip.clone(), display_name);
-                st.total_bytes_sec += size;
-
-                let client_stat = st.client_stats.entry(sender_ip.clone()).or_insert(ClientStat {
-                    last_seq: seq_num,
-                    packets_recv: 0,
-                    packets_lost: 0,
-                    latencies: vec![],
-                    last_seen: recv_time,
-                    hand_raised: false,
-                    last_spoken: 0.0,
-                });
-                client_stat.last_seen = recv_time;
-                client_stat.packets_recv += 1;
-
-                if max_amp > 800 {
-                    client_stat.last_spoken = recv_time;
-                }
-
-                let latency = (recv_time - send_time) * 1000.0;
-                if (0.0..2000.0).contains(&latency) {
-                    client_stat.latencies.push(latency);
-                    if client_stat.latencies.len() > 15 {
-                        client_stat.latencies.remove(0);
-                    }
-                }
-                if seq_num > client_stat.last_seq + 1 {
-                    client_stat.packets_lost += seq_num - client_stat.last_seq - 1;
-                }
-                client_stat.last_seq = seq_num;
 
                 // Routing audio do innych uczniów
                 if has_audio && !st.is_broadcasting {

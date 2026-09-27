@@ -256,23 +256,71 @@ pub fn assign_client_room(ip: String, room: String, state: State<'_, SharedServe
                 }
             }
         }
+    } else {
+        let other_pool_ips: Vec<String> = st.ip_to_group.iter().filter(|(k, v)| *v == "Brak" && *k != &ip).map(|(k, _)| k.clone()).collect();
+        for other_ip in other_pool_ips {
+            if let Some(target_addr) = st.ip_to_addr.get(&other_ip).cloned() {
+                if let Some(ref sock) = st.audio_socket {
+                    let _ = sock.send_to(msg_new.as_bytes(), target_addr);
+                }
+            }
+        }
     }
 
     // Powiadom stary pokój o odejściu klienta
-    if old_room != "Brak" && old_room != room {
+    if old_room != room {
         let old_members = crate::network::get_room_members_payload(&st, &old_room, now);
         let old_json = serde_json::to_string(&old_members).unwrap_or_default();
         let msg_old = format!("VOIP_ROOM:{}|{}", old_room, old_json);
-        if let Some(ips) = st.groups.get(&old_room).cloned() {
-            for mem_ip in ips {
-                if let Some(target_addr) = st.ip_to_addr.get(&mem_ip).cloned() {
-                    if let Some(ref sock) = st.audio_socket {
+        let target_ips: Vec<String> = if old_room != "Brak" {
+            st.groups.get(&old_room).cloned().unwrap_or_default()
+        } else {
+            st.ip_to_group.iter().filter(|(k, v)| *v == "Brak" && *k != &ip).map(|(k, _)| k.clone()).collect()
+        };
+        for mem_ip in target_ips {
+            if let Some(target_addr) = st.ip_to_addr.get(&mem_ip).cloned() {
+                if let Some(ref sock) = st.audio_socket {
+                    for _ in 0..2 {
                         let _ = sock.send_to(msg_old.as_bytes(), target_addr);
                     }
                 }
             }
         }
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_room(room: String, state: State<'_, SharedServerState>) -> Result<(), String> {
+    if !crate::licensing::is_activated() {
+        return Err("Aplikacja serwera nie została aktywowana!".to_string());
+    }
+    let mut st = state.lock().unwrap();
+
+    if st.listening_room.as_deref() == Some(&room) {
+        st.listening_room = None;
+    }
+
+    if let Some(members) = st.groups.remove(&room) {
+        for ip in &members {
+            st.ip_to_group.insert(ip.clone(), "Brak".to_string());
+        }
+        let now = crate::state::current_time();
+        let pool_members = crate::network::get_room_members_payload(&st, "Brak", now);
+        let pool_json = serde_json::to_string(&pool_members).unwrap_or_default();
+        let msg = format!("VOIP_ROOM:Brak|{}", pool_json);
+        for ip in st.ip_to_group.iter().filter(|(_, v)| *v == "Brak").map(|(k, _)| k.clone()).collect::<Vec<_>>() {
+            if let Some(target_addr) = st.ip_to_addr.get(&ip).cloned() {
+                if let Some(ref sock) = st.audio_socket {
+                    for _ in 0..2 {
+                        let _ = sock.send_to(msg.as_bytes(), target_addr);
+                    }
+                }
+            }
+        }
+    }
+
+    println!("[SERWER] Usunięto pokój '{}' i zresetowano jego uczestników do Poczekalni", room);
     Ok(())
 }
 
@@ -286,11 +334,16 @@ pub fn reset_all_to_pool(state: State<'_, SharedServerState>) -> Result<(), Stri
     let ips: Vec<String> = st.client_stats.keys().cloned().collect();
     for ip in &ips {
         st.ip_to_group.insert(ip.clone(), "Brak".to_string());
+    }
+    let now = crate::state::current_time();
+    let pool_members = crate::network::get_room_members_payload(&st, "Brak", now);
+    let pool_json = serde_json::to_string(&pool_members).unwrap_or_default();
+    let msg = format!("VOIP_ROOM:Brak|{}", pool_json);
+    for ip in &ips {
         if let Some(target_addr) = st.ip_to_addr.get(ip).cloned() {
-            let msg = b"VOIP_ROOM:Brak|[]";
             if let Some(ref sock) = st.audio_socket {
-                for _ in 0..3 {
-                    let _ = sock.send_to(msg, target_addr);
+                for _ in 0..2 {
+                    let _ = sock.send_to(msg.as_bytes(), target_addr);
                 }
             }
         }

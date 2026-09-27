@@ -39,6 +39,7 @@ pub fn run() {
             commands::check_firewall_rule,
             commands::add_firewall_rule,
             commands::assign_client_room,
+            commands::delete_room,
             commands::reset_all_to_pool,
             commands::auto_pair_clients,
             commands::set_broadcast,
@@ -67,6 +68,13 @@ pub fn run() {
             commands::get_dashboard_data
         ])
         .setup(move |app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_min_size(Some(tauri::LogicalSize {
+                    width: 800.0,
+                    height: 540.0,
+                }));
+            }
+
             let app_handle = app.handle().clone();
             let teacher_audio: audio::TeacherAudioBuffer = Arc::new(Mutex::new(HashMap::new()));
 
