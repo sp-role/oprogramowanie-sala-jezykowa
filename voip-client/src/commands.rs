@@ -1,6 +1,8 @@
+#[cfg(windows)]
 use is_elevated::is_elevated;
 use std::collections::VecDeque;
 use std::net::UdpSocket;
+#[cfg(windows)]
 use std::process::Command;
 use std::time::Duration;
 use tauri::State;
@@ -10,7 +12,14 @@ use crate::state::{PORT_DISCOVERY, SharedClientState};
 
 #[tauri::command]
 pub fn check_admin() -> bool {
-    is_elevated()
+    #[cfg(windows)]
+    {
+        is_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -342,34 +351,28 @@ pub fn toggle_self_mute(state: State<'_, SharedClientState>) -> bool {
 
 #[tauri::command]
 pub fn leave_room(state: State<'_, SharedClientState>) -> Result<(), String> {
-    let mut st = state.lock().unwrap();
-    st.group = Some("Poczekalnia".to_string());
-    st.room_members.clear();
-    st.hand_raised = false;
-
-    if let Some(ref server_ip) = st.server_ip {
-        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            let target = format!("{}:{}", server_ip, crate::state::PORT_AUDIO);
-            let _ = socket.send_to(b"VOIP_LEAVE", &target);
-        }
-    }
-    Ok(())
+    leave_lesson(state)
 }
 
 #[tauri::command]
 pub fn leave_lesson(state: State<'_, SharedClientState>) -> Result<(), String> {
     let mut st = state.lock().unwrap();
-    st.is_joined = false;
-    st.group = None;
-    st.room_members.clear();
-    st.hand_raised = false;
-
     if let Some(ref server_ip) = st.server_ip {
         if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
             let target = format!("{}:{}", server_ip, crate::state::PORT_AUDIO);
-            let _ = socket.send_to(b"VOIP_DISCONNECT", &target);
+            for _ in 0..3 {
+                let _ = socket.send_to(b"VOIP_DISCONNECT", &target);
+            }
         }
     }
+    st.is_joined = false;
+    st.server_ip = None;
+    st.group = None;
+    st.room_members.clear();
+    st.hand_raised = false;
+    st.is_speaking = false;
+    st.is_muted_by_teacher = false;
+    st.last_server_packet = 0.0;
     Ok(())
 }
 

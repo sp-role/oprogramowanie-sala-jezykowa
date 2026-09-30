@@ -262,6 +262,8 @@ fn get_app_dir() -> PathBuf {
     }
 }
 
+static ACTIVATION_CACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
     verify_online_or_offline(hardware_id, code, "client")?;
     let token = generate_license_token(code, hardware_id);
@@ -273,10 +275,14 @@ pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
         token
     );
     fs::write(&path, content).map_err(|e| format!("Błąd zapisu licencji: {}", e))?;
+    ACTIVATION_CACHED.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 pub fn is_activated() -> bool {
+    if ACTIVATION_CACHED.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
     let current_hw_id = get_hardware_id();
     let path = get_license_file_path();
     if let Ok(content) = fs::read_to_string(&path) {
@@ -290,6 +296,7 @@ pub fn is_activated() -> bool {
             if saved_hw_id.eq_ignore_ascii_case(&current_hw_id) {
                 let expected = generate_license_token(saved_code, &current_hw_id);
                 if saved_token.eq_ignore_ascii_case(&expected) {
+                    ACTIVATION_CACHED.store(true, std::sync::atomic::Ordering::Relaxed);
                     return true;
                 }
             }
@@ -307,6 +314,7 @@ pub fn is_activated() -> bool {
                         new_token
                     );
                     let _ = fs::write(&path, migrated_content);
+                    ACTIVATION_CACHED.store(true, std::sync::atomic::Ordering::Relaxed);
                     return true;
                 }
             }

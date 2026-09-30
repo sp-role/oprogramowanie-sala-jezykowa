@@ -19,6 +19,7 @@ pub fn run() {
 
     let state: SharedServerState = Arc::new(Mutex::new(ServerState::default()));
     let state_clone = state.clone();
+    let state_event = state.clone();
 
     let media_player: state::SharedMediaPlayer = Arc::new(Mutex::new(state::MediaPlayerData::default()));
     let media_player_clone = media_player.clone();
@@ -131,10 +132,12 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(move |window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.emit("request_close", ());
+            } else if let tauri::WindowEvent::Destroyed = event {
+                network::broadcast_shutdown(&state_event);
             }
         })
         .run(tauri::generate_context!())

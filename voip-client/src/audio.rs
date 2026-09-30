@@ -108,8 +108,8 @@ impl AgcProcessor {
             return;
         }
 
-        // 1. Filtr DC Blocker (odcięcie składowej stałej i przydźwięku < 70 Hz)
-        let r = 0.992f32;
+        // 1. Filtr górnoprzepustowy High-Pass / DC Blocker (odcięcie dudnienia, dmuchania w mikrofon i przydźwięku < 85 Hz)
+        let r = 0.988f32;
         let mut block_max = 0.0001f32;
         for s in samples.iter_mut() {
             let x = *s;
@@ -245,8 +245,13 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, _audio_
             stream_error_cb.store(true, Ordering::SeqCst);
         };
 
+        let mut accum_samples = VecDeque::<f32>::with_capacity(4800);
+        let mut preroll_buffer = VecDeque::<f32>::with_capacity(2880);
+        let mut was_transmitting = false;
+        const FRAME_SIZE: usize = 960; // 20ms przy 48000 Hz
+
         let mut on_mono_samples = move |mono_samples: &[f32]| {
-            let mut samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
+            let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
                 let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
                 let out_len = ((mono_samples.len() as f64) / ratio).round() as usize;
                 let mut out = Vec::with_capacity(out_len);
@@ -264,61 +269,119 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, _audio_
                 mono_samples.to_vec()
             };
 
-            let raw_max = samples_48k.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+            let instant_raw_max = samples_48k.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
             let now = current_time();
 
-            let (target_addr, packet) = {
+            // Szybka aktualizacja wskaźnika poziomu mikrofonu w UI oraz bufora nagrywania testowego
+            {
                 let mut st = audio_state.lock().unwrap();
-                let vad_threshold = st.vad_threshold;
-                let is_speech = raw_max >= vad_threshold;
-                if is_speech {
-                    last_speech = Instant::now();
-                }
-
-                let speech_active = last_speech.elapsed() < Duration::from_millis(350);
-
-                if st.agc_enabled {
-                    agc.process(&mut samples_48k, speech_active);
-                }
-
-                let final_amp = samples_48k.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
-                let is_teacher_talking = (now - st.last_teacher_broadcast) < 0.6;
-                st.is_muted_by_teacher = is_teacher_talking;
-                st.is_speaking = speech_active && !is_teacher_talking;
-
-                let is_recording = st.mic_test_phase == "recording";
-                let is_playing = st.mic_test_phase == "playing";
-
-                // Płynny wskaźnik mic_level z decay (działa na żywo także w trakcie testu)
-                let instant_level = (final_amp * 4.0).min(1.0);
+                let instant_level = (instant_raw_max * 4.0).min(1.0);
                 st.mic_level = if instant_level > st.mic_level {
                     instant_level
                 } else {
                     st.mic_level * 0.86
                 };
 
-                let is_self_muted = st.is_self_muted;
-                if is_self_muted || is_recording || is_playing {
-                    st.is_speaking = false;
-                }
-
-                if is_playing {
-                    // Podczas odsłuchu nagrania w słuchawkach nie rejestrujemy ani nie wysyłamy głosu
-                    (None, None)
-                } else if is_recording {
-                    // Faza 1: Rejestrowanie czystego głosu do bufora testowego (resampling do 48000 Hz)
-                    // Ograniczenie bufora do maksymalnie 6 sekund (288 000 próbek)
+                if st.mic_test_phase == "recording" {
                     if st.mic_record_buffer.len() < (SAMPLE_RATE as usize * 6) {
                         st.mic_record_buffer.extend_from_slice(&samples_48k);
                     }
-                    (None, None)
-                } else if !st.is_joined || st.username.trim().is_empty() || !speech_active || is_teacher_talking || is_self_muted || !crate::licensing::is_activated() {
-                    (None, None)
-                } else {
-                    // Normalne przesyłanie mowy ucznia na serwer
-                    if st.server_ip.is_none() {
-                        (None, None)
-                    } else {
+                }
+            }
+
+            // Gromadzimy próbki w akumulatorze do wysyłki w równych ramkach 20ms (960 próbek)
+            accum_samples.extend(samples_48k);
+
+            while accum_samples.len() >= FRAME_SIZE {
+                let mut frame: Vec<f32> = accum_samples.drain(..FRAME_SIZE).collect();
+                let frame_max = frame.iter().fold(0.0f32, |acc, &s| acc.max(s.abs()));
+
+                let (target_addr, packet_to_send, preroll_pkt) = {
+                    let mut st = audio_state.lock().unwrap();
+                    let vad_threshold = st.vad_threshold;
+                    let is_speech = frame_max >= vad_threshold;
+                    if is_speech {
+                        last_speech = Instant::now();
+                    }
+
+                    // Czas podtrzymania VAD (hangover) 750ms eliminuje jakiekolwiek ucinanie sylab i przerw między słowami
+                    let speech_active = last_speech.elapsed() < Duration::from_millis(750);
+
+                    if st.agc_enabled {
+                        agc.process(&mut frame, speech_active);
+                    }
+
+                    let is_teacher_talking = (now - st.last_teacher_broadcast) < 0.6;
+                    st.is_muted_by_teacher = is_teacher_talking;
+                    st.is_speaking = speech_active && !is_teacher_talking;
+
+                    let is_recording = st.mic_test_phase == "recording";
+                    let is_playing = st.mic_test_phase == "playing";
+                    let is_self_muted = st.is_self_muted;
+
+                    if is_self_muted || is_recording || is_playing {
+                        st.is_speaking = false;
+                    }
+
+                    let can_transmit = st.is_joined
+                        && !st.username.trim().is_empty()
+                        && !is_teacher_talking
+                        && !is_self_muted
+                        && !is_recording
+                        && !is_playing
+                        && crate::licensing::is_activated()
+                        && st.server_ip.is_some();
+
+                    if !can_transmit {
+                        was_transmitting = false;
+                        preroll_buffer.clear();
+                        (None, None, None)
+                    } else if speech_active {
+                        let server_ip = st.server_ip.as_ref().unwrap();
+                        let target_addr = format!("{}:{}", server_ip, PORT_AUDIO);
+                        let username = st.username.clone();
+                        let name_bytes = username.as_bytes();
+                        let name_len = (name_bytes.len().min(64)) as u8;
+
+                        let mut opt_preroll = None;
+                        if !was_transmitting {
+                            // Początek mowy: dołącz bufor pre-roll (początkowe głoski nie zostaną ucięte)
+                            if !preroll_buffer.is_empty() {
+                                st.seq_num += 1;
+                                let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (preroll_buffer.len() * 2));
+                                let _ = pkt.write_u32::<BigEndian>(st.seq_num);
+                                let _ = pkt.write_f64::<BigEndian>(now);
+                                pkt.push(name_len);
+                                pkt.extend_from_slice(&name_bytes[..name_len as usize]);
+
+                                let preroll_samples: Vec<f32> = preroll_buffer.drain(..).collect();
+                                for (i, &sample) in preroll_samples.iter().enumerate() {
+                                    // Łagodny ramp-up 5ms na samym starcie
+                                    let attack = (i as f32 / 240.0).min(1.0);
+                                    let clamped = (sample * attack).clamp(-1.0, 1.0);
+                                    let _ = pkt.write_i16::<BigEndian>((clamped * 32767.0) as i16);
+                                }
+                                opt_preroll = Some(pkt);
+                            }
+                            was_transmitting = true;
+                        }
+
+                        st.seq_num += 1;
+                        let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (frame.len() * 2));
+                        let _ = pkt.write_u32::<BigEndian>(st.seq_num);
+                        let _ = pkt.write_f64::<BigEndian>(now);
+                        pkt.push(name_len);
+                        pkt.extend_from_slice(&name_bytes[..name_len as usize]);
+
+                        for &sample in &frame {
+                            let clamped = sample.clamp(-1.0, 1.0);
+                            let _ = pkt.write_i16::<BigEndian>((clamped * 32767.0) as i16);
+                        }
+
+                        (Some(target_addr), Some(pkt), opt_preroll)
+                    } else if was_transmitting {
+                        // Koniec mowy: wyślij 1 ramkę z łagodnym wygaszeniem (fade-out), aby nie było trzasku
+                        was_transmitting = false;
                         let server_ip = st.server_ip.as_ref().unwrap();
                         let target_addr = format!("{}:{}", server_ip, PORT_AUDIO);
                         st.seq_num += 1;
@@ -326,25 +389,35 @@ pub fn capture_and_send_pcm(state: SharedClientState, socket: UdpSocket, _audio_
                         let name_bytes = username.as_bytes();
                         let name_len = (name_bytes.len().min(64)) as u8;
 
-                        let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (samples_48k.len() * 2));
+                        let mut pkt = Vec::with_capacity(13 + (name_len as usize) + (frame.len() * 2));
                         let _ = pkt.write_u32::<BigEndian>(st.seq_num);
                         let _ = pkt.write_f64::<BigEndian>(now);
                         pkt.push(name_len);
                         pkt.extend_from_slice(&name_bytes[..name_len as usize]);
 
-                        for &sample in &samples_48k {
-                            let clamped = sample.clamp(-1.0, 1.0);
+                        for (i, &sample) in frame.iter().enumerate() {
+                            let release = (1.0 - (i as f32 / frame.len() as f32)).clamp(0.0, 1.0);
+                            let clamped = (sample * release).clamp(-1.0, 1.0);
                             let _ = pkt.write_i16::<BigEndian>((clamped * 32767.0) as i16);
                         }
 
-                        (Some(target_addr), Some(pkt))
+                        (Some(target_addr), Some(pkt), None)
+                    } else {
+                        // Cisza: aktualizuj pre-roll bufor (trzyma ostatnie 50ms)
+                        preroll_buffer.extend(frame);
+                        while preroll_buffer.len() > 2400 {
+                            preroll_buffer.pop_front();
+                        }
+                        (None, None, None)
                     }
-                }
-            };
+                };
 
-            // Wysłanie pakietu audio do serwera
-            if let (Some(addr), Some(pkt)) = (target_addr, packet) {
-                let _ = audio_socket.send_to(&pkt, addr);
+                if let (Some(ref addr), Some(ref preroll)) = (&target_addr, &preroll_pkt) {
+                    let _ = audio_socket.send_to(preroll, addr);
+                }
+                if let (Some(ref addr), Some(ref pkt)) = (&target_addr, &packet_to_send) {
+                    let _ = audio_socket.send_to(pkt, addr);
+                }
             }
         };
 
@@ -497,30 +570,68 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     let state_cb = state_playback.clone();
                     let mut accum = 0.0f64;
                     let mut last_mixed = 0.0f32;
+                    let mut prev_mixed = 0.0f32;
+                    let mut buffering_map: HashMap<String, bool> = HashMap::new();
+                    let mut last_seen_map: HashMap<String, Instant> = HashMap::new();
 
                     device.build_output_stream(
                         &out_config,
                         move |out_data: &mut [f32], _| {
                             let vol = state_cb.try_lock().map(|st| st.volume).unwrap_or(1.0);
+                            let now_inst = Instant::now();
                             if let Ok(mut streams) = streams_cb.lock() {
                                 for frame in out_data.chunks_mut(out_channels) {
                                     accum += ratio;
                                     while accum >= 1.0 {
+                                        prev_mixed = last_mixed;
                                         let mut step_mixed = 0.0f32;
-                                        for (_, buf) in streams.iter_mut() {
-                                            if let Some(s) = buf.pop_front() {
-                                                step_mixed += s;
+                                        for (key, buf) in streams.iter_mut() {
+                                            if !buf.is_empty() {
+                                                last_seen_map.insert(key.clone(), now_inst);
+                                            }
+                                            let is_test = key.starts_with("__");
+                                            let is_buf = buffering_map.entry(key.clone()).or_insert(!is_test);
+
+                                            if *is_buf {
+                                                if is_test || buf.len() >= 1440 {
+                                                    // 30ms pre-buffer osiągnięty
+                                                    *is_buf = false;
+                                                }
+                                            }
+
+                                            if !*is_buf {
+                                                if let Some(s) = buf.pop_front() {
+                                                    step_mixed += s;
+                                                } else {
+                                                    // Chwilowy underrun (brak próbek w buforze)
+                                                    if !is_test {
+                                                        *is_buf = true;
+                                                    }
+                                                }
                                             }
                                         }
                                         last_mixed = step_mixed;
                                         accum -= 1.0;
                                     }
-                                    let sample_val = soft_limit(last_mixed * vol);
+
+                                    // Liniowa interpolacja dla częstotliwości próbkowania innej niż 48kHz (np. 44.1kHz, 96kHz)
+                                    let frac = accum.clamp(0.0, 1.0) as f32;
+                                    let interpolated = prev_mixed * (1.0 - frac) + last_mixed * frac;
+                                    let sample_val = soft_limit(interpolated * vol);
+
                                     for ch in frame.iter_mut() {
                                         *ch = sample_val;
                                     }
                                 }
-                                streams.retain(|_, buf| !buf.is_empty());
+
+                                // Zachowaj strumienie przez 2.5s ciszy, usuwaj tylko trwale nieaktywne
+                                streams.retain(|key, buf| {
+                                    !buf.is_empty()
+                                        || last_seen_map
+                                            .get(key)
+                                            .map(|t| t.elapsed() < Duration::from_millis(2500))
+                                            .unwrap_or(false)
+                                });
                             }
                         },
                         err_fn,
@@ -532,30 +643,64 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                     let state_cb = state_playback.clone();
                     let mut accum = 0.0f64;
                     let mut last_mixed = 0.0f32;
+                    let mut prev_mixed = 0.0f32;
+                    let mut buffering_map: HashMap<String, bool> = HashMap::new();
+                    let mut last_seen_map: HashMap<String, Instant> = HashMap::new();
 
                     device.build_output_stream(
                         &out_config,
                         move |out_data: &mut [i16], _| {
                             let vol = state_cb.try_lock().map(|st| st.volume).unwrap_or(1.0);
+                            let now_inst = Instant::now();
                             if let Ok(mut streams) = streams_cb.lock() {
                                 for frame in out_data.chunks_mut(out_channels) {
                                     accum += ratio;
                                     while accum >= 1.0 {
+                                        prev_mixed = last_mixed;
                                         let mut step_mixed = 0.0f32;
-                                        for (_, buf) in streams.iter_mut() {
-                                            if let Some(s) = buf.pop_front() {
-                                                step_mixed += s;
+                                        for (key, buf) in streams.iter_mut() {
+                                            if !buf.is_empty() {
+                                                last_seen_map.insert(key.clone(), now_inst);
+                                            }
+                                            let is_test = key.starts_with("__");
+                                            let is_buf = buffering_map.entry(key.clone()).or_insert(!is_test);
+
+                                            if *is_buf {
+                                                if is_test || buf.len() >= 1440 {
+                                                    *is_buf = false;
+                                                }
+                                            }
+
+                                            if !*is_buf {
+                                                if let Some(s) = buf.pop_front() {
+                                                    step_mixed += s;
+                                                } else {
+                                                    if !is_test {
+                                                        *is_buf = true;
+                                                    }
+                                                }
                                             }
                                         }
                                         last_mixed = step_mixed;
                                         accum -= 1.0;
                                     }
-                                    let sample_val = (soft_limit(last_mixed * vol) * 32767.0) as i16;
+
+                                    let frac = accum.clamp(0.0, 1.0) as f32;
+                                    let interpolated = prev_mixed * (1.0 - frac) + last_mixed * frac;
+                                    let sample_val = (soft_limit(interpolated * vol) * 32767.0) as i16;
+
                                     for ch in frame.iter_mut() {
                                         *ch = sample_val;
                                     }
                                 }
-                                streams.retain(|_, buf| !buf.is_empty());
+
+                                streams.retain(|key, buf| {
+                                    !buf.is_empty()
+                                        || last_seen_map
+                                            .get(key)
+                                            .map(|t| t.elapsed() < Duration::from_millis(2500))
+                                            .unwrap_or(false)
+                                });
                             }
                         },
                         err_fn,
@@ -593,6 +738,23 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
         if let Ok((size, addr)) = socket.recv_from(&mut recv_buf) {
                 let now = current_time();
 
+                // Obsługa natychmiastowego wyłączenia / rozłączenia przez serwer
+                if (size >= 20 && &recv_buf[..20] == b"VOIP_SERVER_SHUTDOWN")
+                    || (size >= 15 && &recv_buf[..15] == b"VOIP_DISCONNECT")
+                {
+                    let mut st = state.lock().unwrap();
+                    println!("[KLIENT-AUDIO] Otrzymano sygnał wyłączenia serwera (VOIP_SERVER_SHUTDOWN). Natychmiastowy reset sesji.");
+                    st.server_ip = None;
+                    st.group = None;
+                    st.is_speaking = false;
+                    st.is_muted_by_teacher = false;
+                    st.room_members.clear();
+                    st.hand_raised = false;
+                    st.is_joined = false;
+                    st.last_server_packet = 0.0;
+                    continue;
+                }
+
                 // Dynamiczna synchronizacja pokoju roboczego oraz składu uczestników
                 if size >= 10 && (&recv_buf[..10] == b"VOIP_ROOM:" || &recv_buf[..10] == b"VOIP_PONG:") {
                     if let Ok(text) = std::str::from_utf8(&recv_buf[10..size]) {
@@ -622,9 +784,15 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                             if let Ok(server_members) = serde_json::from_str::<Vec<ServerMember>>(m_json) {
                                 let my_name = st.username.trim().to_string();
                                 let mut members = Vec::new();
+                                let mut found_self = false;
                                 for sm in server_members {
                                     let clean_sm_name = sm.name.trim().to_string();
-                                    let is_me = !my_name.is_empty() && (clean_sm_name == my_name || my_name.contains(&clean_sm_name) || clean_sm_name.contains(&my_name));
+                                    let is_me = if !found_self && !my_name.is_empty() && clean_sm_name.eq_ignore_ascii_case(&my_name) {
+                                        found_self = true;
+                                        true
+                                    } else {
+                                        false
+                                    };
                                     members.push(crate::state::RoomMemberInfo {
                                         name: clean_sm_name,
                                         is_speaking: sm.is_speaking,
@@ -661,21 +829,25 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                         let sender_name = std::str::from_utf8(&recv_buf[13..audio_offset]).unwrap_or("").trim();
                         if !sender_name.is_empty() && !sender_name.starts_with("Nauczyciel") && !sender_name.starts_with("Lektor") {
                             let mut st = state.lock().unwrap();
-                            let mut found = false;
-                            for m in st.room_members.iter_mut() {
-                                if m.name == sender_name || m.name.contains(sender_name) {
-                                    m.is_speaking = true;
-                                    found = true;
-                                    break;
+                            let my_name = st.username.trim().to_string();
+                            let is_me = !my_name.is_empty() && sender_name.eq_ignore_ascii_case(&my_name);
+                            if !is_me {
+                                let mut found = false;
+                                for m in st.room_members.iter_mut() {
+                                    if m.name.eq_ignore_ascii_case(sender_name) {
+                                        m.is_speaking = true;
+                                        found = true;
+                                        break;
+                                    }
                                 }
-                            }
-                            if !found {
-                                st.room_members.push(crate::state::RoomMemberInfo {
-                                    name: sender_name.to_string(),
-                                    is_speaking: true,
-                                    is_self: false,
-                                    hand_raised: false,
-                                });
+                                if !found {
+                                    st.room_members.push(crate::state::RoomMemberInfo {
+                                        name: sender_name.to_string(),
+                                        is_speaking: true,
+                                        is_self: false,
+                                        hand_raised: false,
+                                    });
+                                }
                             }
                         }
 
@@ -689,11 +861,17 @@ pub fn receive_and_play_pcm(state: SharedClientState, socket: UdpSocket, audio_s
                         let mut streams = audio_streams.lock().unwrap();
                         let buf = streams.entry(sender_key).or_insert_with(VecDeque::new);
 
-                        // Adaptacyjny bufor jittera 150 ms (eliminacja opóźnień)
-                        let max_jitter_samples = (SAMPLE_RATE as usize * 150) / 1000; // 7200 próbek = 150 ms
-                        let target_jitter_samples = (SAMPLE_RATE as usize * 40) / 1000; // 1920 próbek = 40 ms
+                        // Adaptacyjny bufor jittera (max 120 ms, target 35 ms) z łagodnym wygaszeniem
+                        let max_jitter_samples = (SAMPLE_RATE as usize * 120) / 1000; // 5760 próbek = 120 ms
+                        let target_jitter_samples = (SAMPLE_RATE as usize * 35) / 1000; // 1680 próbek = 35 ms
                         if buf.len() > max_jitter_samples {
                             let drain_count = buf.len() - target_jitter_samples;
+                            let fade_len = 240.min(target_jitter_samples);
+                            for i in 0..fade_len {
+                                let old_s = buf[drain_count + i];
+                                let factor = i as f32 / fade_len as f32;
+                                buf[drain_count + i] = old_s * factor;
+                            }
                             buf.drain(..drain_count);
                         }
                         buf.extend(decoded_samples);

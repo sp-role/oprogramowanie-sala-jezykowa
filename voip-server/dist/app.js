@@ -290,7 +290,11 @@ async function handleFirewall() {
 }
 
 function addNewRoom() {
-  const name = `Pokój ${roomsList.length + 1}`;
+  let nextNum = 1;
+  while (roomsList.includes(`Pokój ${nextNum}`)) {
+    nextNum++;
+  }
+  const name = `Pokój ${nextNum}`;
   roomsList.push(name);
   renderRooms();
   showToast(`Utworzono nową grupę: ${name}`, 'info');
@@ -307,7 +311,11 @@ async function autoPairStudents() {
 
   const neededRooms = Math.ceil(globalClientsData.length / 2);
   while (roomsList.length < neededRooms) {
-    roomsList.push(`Pokój ${roomsList.length + 1}`);
+    let nextNum = 1;
+    while (roomsList.includes(`Pokój ${nextNum}`)) {
+      nextNum++;
+    }
+    roomsList.push(`Pokój ${nextNum}`);
   }
   pendingRoomAssignments.clear();
   renderRooms();
@@ -377,45 +385,97 @@ function clearHand(ip) {
 }
 
 function renderRooms() {
-  document.getElementById('rooms-container').innerHTML = roomsList
-    .map((room) => {
-      const isListen = activeListenRoom === room;
-      return `
-      <div class="room-card bg-white rounded-2xl border ${isListen ? 'border-2 border-red-500 shadow-xl ring-4 ring-red-100' : 'border-slate-200/90 shadow-sm'} flex flex-col min-h-[16rem] h-64 transition-all duration-200 overflow-hidden"
-           data-room="${room}"
-           ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')">
-        
-        <!-- NAGŁÓWEK POKOJU -->
-        <div class="px-4 py-3 border-b flex justify-between items-center ${isListen ? 'bg-red-50/80 border-red-200' : 'bg-slate-50/90 border-slate-200'}">
-          <div class="flex items-center gap-2">
-            <span class="w-8 h-8 rounded-xl ${isListen ? 'bg-red-100 text-red-600' : 'bg-slate-200/80 text-[#1e3a5f]'} flex items-center justify-center">
-              <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 3s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-            </span>
-            <div>
-              <span class="font-bold text-slate-800 text-sm block leading-tight">${room}</span>
-              ${isListen ? '<span class="text-[10px] font-bold text-red-600 flex items-center gap-1 leading-none mt-0.5"><span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> ODSŁUCH NA ŻYWO</span>' : ''}
+  const container = document.getElementById('rooms-container');
+  if (!container) return;
+
+  const validRooms = new Set(roomsList);
+
+  // 1. Usuń pokoje, które zostały usunięte z roomsList
+  container.querySelectorAll('.room-card').forEach((card) => {
+    const roomName = card.dataset.room;
+    if (!validRooms.has(roomName)) {
+      card.remove();
+    }
+  });
+
+  // 2. Dodaj nowe pokoje lub zaktualizuj stan podsłuchu istniejących (bez niszczenia kart w środku!)
+  roomsList.forEach((room) => {
+    const isListen = activeListenRoom === room;
+    let roomCard = container.querySelector(`.room-card[data-room="${room}"]`);
+
+    if (!roomCard) {
+      const template = document.createElement('template');
+      template.innerHTML = `
+        <div class="room-card bg-white rounded-2xl border ${isListen ? 'border-2 border-red-500 shadow-xl ring-4 ring-red-100' : 'border-slate-200/90 shadow-sm'} flex flex-col min-h-[16rem] h-64 transition-all duration-200 overflow-hidden"
+             data-room="${room}"
+             ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')">
+          
+          <!-- NAGŁÓWEK POKOJU -->
+          <div class="room-header px-4 py-3 border-b flex justify-between items-center ${isListen ? 'bg-red-50/80 border-red-200' : 'bg-slate-50/90 border-slate-200'}">
+            <div class="flex items-center gap-2">
+              <span class="room-icon-box w-8 h-8 rounded-xl ${isListen ? 'bg-red-100 text-red-600' : 'bg-slate-200/80 text-[#1e3a5f]'} flex items-center justify-center">
+                <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 3s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+              </span>
+              <div>
+                <span class="font-bold text-slate-800 text-sm block leading-tight">${room}</span>
+                <div class="listen-indicator">${isListen ? '<span class="text-[10px] font-bold text-red-600 flex items-center gap-1 leading-none mt-0.5"><span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> ODSŁUCH NA ŻYWO</span>' : ''}</div>
+              </div>
+            </div>
+            
+            <div class="flex items-center gap-1.5">
+              <button onclick="toggleListen('${room}')" class="listen-btn text-xs px-3 py-1.5 rounded-xl shadow-sm border transition font-semibold flex items-center gap-1.5 cursor-pointer ${isListen ? 'bg-red-600 hover:bg-red-700 text-white border-red-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
+                ${isListen 
+                  ? '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><span>Wyłącz</span>' 
+                  : '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H5v-2a7 7 0 1 1 14 0v2h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/></svg><span>Podsłuch</span>'}
+              </button>
+              <button onclick="promptDeleteRoom('${room}')" title="Usuń ${room}" class="p-1.5 rounded-xl border border-slate-300 hover:border-red-300 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 transition active:scale-95 cursor-pointer flex items-center justify-center">
+                <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              </button>
             </div>
           </div>
-          
-          <div class="flex items-center gap-1.5">
-            <button onclick="toggleListen('${room}')" class="text-xs px-3 py-1.5 rounded-xl shadow-sm border transition font-semibold flex items-center gap-1.5 cursor-pointer ${isListen ? 'bg-red-600 hover:bg-red-700 text-white border-red-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}">
-              ${isListen 
-                ? '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><span>Wyłącz</span>' 
-                : '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H5v-2a7 7 0 1 1 14 0v2h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/></svg><span>Podsłuch</span>'}
-            </button>
-            <button onclick="promptDeleteRoom('${room}')" title="Usuń ${room}" class="p-1.5 rounded-xl border border-slate-300 hover:border-red-300 bg-white hover:bg-red-50 text-slate-400 hover:text-red-600 transition active:scale-95 cursor-pointer flex items-center justify-center">
-              <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-            </button>
-          </div>
-        </div>
 
-        <!-- STREFA ZRZUTU UCZNIÓW -->
-        <div class="flex-1 overflow-y-auto p-2 space-y-1.5 room-drop-zone bg-white transition" data-room="${room}"
-             ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')"></div>
-      </div>
-    `;
-    })
-    .join('');
+          <!-- STREFA ZRZUTU UCZNIÓW -->
+          <div class="flex-1 overflow-y-auto p-2 space-y-1.5 room-drop-zone bg-white transition" data-room="${room}"
+               ondragover="allowDrop(event)" ondrop="dropToRoom(event, '${room}')"></div>
+        </div>
+      `.trim();
+      roomCard = template.content.firstElementChild;
+      container.appendChild(roomCard);
+    } else {
+      // Zaktualizuj tylko nagłówek i podsłuch istniejącego pokoju bez usuwania dzieci
+      roomCard.className = `room-card bg-white rounded-2xl border ${isListen ? 'border-2 border-red-500 shadow-xl ring-4 ring-red-100' : 'border-slate-200/90 shadow-sm'} flex flex-col min-h-[16rem] h-64 transition-all duration-200 overflow-hidden`;
+      const header = roomCard.querySelector('.room-header');
+      if (header) {
+        header.className = `room-header px-4 py-3 border-b flex justify-between items-center ${isListen ? 'bg-red-50/80 border-red-200' : 'bg-slate-50/90 border-slate-200'}`;
+      }
+      const iconBox = roomCard.querySelector('.room-icon-box');
+      if (iconBox) {
+        iconBox.className = `room-icon-box w-8 h-8 rounded-xl ${isListen ? 'bg-red-100 text-red-600' : 'bg-slate-200/80 text-[#1e3a5f]'} flex items-center justify-center`;
+      }
+      const indicator = roomCard.querySelector('.listen-indicator');
+      if (indicator) {
+        indicator.innerHTML = isListen ? '<span class="text-[10px] font-bold text-red-600 flex items-center gap-1 leading-none mt-0.5"><span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> ODSŁUCH NA ŻYWO</span>' : '';
+      }
+      const listenBtn = roomCard.querySelector('.listen-btn');
+      if (listenBtn) {
+        listenBtn.className = `listen-btn text-xs px-3 py-1.5 rounded-xl shadow-sm border transition font-semibold flex items-center gap-1.5 cursor-pointer ${isListen ? 'bg-red-600 hover:bg-red-700 text-white border-red-700' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}`;
+        listenBtn.innerHTML = isListen 
+          ? '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg><span>Wyłącz</span>' 
+          : '<svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9v7a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2H5v-2a7 7 0 1 1 14 0v2h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-7a9 9 0 0 0-9-9z"/></svg><span>Podsłuch</span>';
+      }
+    }
+  });
+
+  // Zaktualizuj opcje we wszystkich selectach o nowy pokój
+  document.querySelectorAll('.client-room-select').forEach((sel) => {
+    const currentVal = sel.value;
+    let roomOptions = `<option value="Brak"${currentVal === 'Brak' ? ' selected' : ''}>Poczekalnia</option>`;
+    roomsList.forEach((r) => {
+      roomOptions += `<option value="${r}"${currentVal === r ? ' selected' : ''}>${r}</option>`;
+    });
+    sel.innerHTML = roomOptions;
+  });
+
   updateUIWithData(globalClientsData);
   updateMediaTargetSelect();
 }
@@ -959,6 +1019,14 @@ function applyDashboardData(data) {
     return c;
   });
 
+  globalClientsData.sort((a, b) => {
+    const nameA = a.name || '';
+    const nameB = b.name || '';
+    const cmp = nameA.localeCompare(nameB, 'pl', { numeric: true, sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+    return (a.ip || '').localeCompare(b.ip || '');
+  });
+
   // Watchdog: jeśli drag wisiał za długo, zresetuj
   if (isDragging && Date.now() - dragStartTime > 8000) {
     cleanupPointerDrag();
@@ -1033,150 +1101,235 @@ function getSignalBarsSvg(quality) {
   `;
 }
 
+function renderClientCard(client) {
+  const h = client.hand_raised;
+  const s = client.is_speaking;
+  const ping = client.ping_ms || 0;
+  const loss = client.loss_pct || 0;
+  const q = client.quality || 'excellent';
+
+  let pingBadgeClass = 'text-emerald-700 bg-emerald-50 border-emerald-200';
+  let statusText = 'Połączenie stabilne';
+
+  if (q === 'poor') {
+    pingBadgeClass = 'text-red-700 bg-red-50 border-red-300 animate-pulse';
+    statusText = 'Słaba jakość sieci (duże opóźnienie/utrata pakietów)';
+  } else if (q === 'fair') {
+    pingBadgeClass = 'text-amber-700 bg-amber-50 border-amber-300';
+    statusText = 'Średnia jakość sieci';
+  } else if (q === 'good') {
+    pingBadgeClass = 'text-sky-700 bg-sky-50 border-sky-300';
+    statusText = 'Dobra jakość sieci';
+  }
+
+  const signalSvg = getSignalBarsSvg(q);
+  const networkBadgeHtml = `
+    <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-[10px] font-mono font-bold ${pingBadgeClass} flex-shrink-0 shadow-xs"
+         title="Jakość połączenia: ${statusText}&#10;Ping: ${ping} ms&#10;Utrata pakietów: ${loss}%&#10;Adres IP: ${client.ip}">
+      ${signalSvg}
+      <span>${ping} ms</span>
+      ${loss > 0 ? `<span class="text-red-600 font-extrabold ml-0.5">(${loss}%)</span>` : ''}
+    </div>
+  `;
+
+  const bgRowClass = h
+    ? 'bg-amber-50 border-amber-300 shadow-sm ring-1 ring-amber-300'
+    : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm';
+
+  let roomOptions = `<option value="Brak"${client.group === 'Brak' ? ' selected' : ''}>Poczekalnia</option>`;
+  roomsList.forEach((r) => {
+    roomOptions += `<option value="${r}"${client.group === r ? ' selected' : ''}>${r}</option>`;
+  });
+
+  const cleanName = (client.name || 'Uczeń').replace(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*/u, '').trim() || 'Uczeń';
+  const initials = getInitials(cleanName);
+  const palette = getDeterministicPalette(cleanName);
+  const safeClientName = cleanName.replace(/'/g, "\\'");
+
+  const statusSubHtml = h
+    ? '<span class="inline-flex items-center gap-1 font-bold text-amber-700"><svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg> Prośba o pomoc</span>'
+    : s
+    ? '<span class="text-emerald-600 font-bold">Mówi w pokoju...</span>'
+    : `<span class="text-slate-400 font-medium">${client.group !== 'Brak' ? client.group : 'Poczekalnia'}</span>`;
+
+  const handBtnHtml = h
+    ? `<button onclick="clearHand('${client.ip}')" class="p-1 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-900 transition active:scale-95 cursor-pointer flex-shrink-0" title="Odznacz pomoc">
+        <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
+      </button>`
+    : '';
+
+  return `
+    <div onpointerdown="initCardDrag(event, '${client.ip}', '${safeClientName}')"
+         data-ip="${client.ip}"
+         class="client-card group flex items-center p-2 rounded-xl cursor-grab active:cursor-grabbing transition border ${bgRowClass} select-none"
+         style="touch-action: none; -webkit-user-select: none; user-select: none;">
+      
+      <!-- DRAG HANDLE -->
+      <svg class="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-600 mr-1.5 flex-shrink-0 fill-current pointer-events-none" viewBox="0 0 24 24">
+        <path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+      </svg>
+
+      <!-- AWATAR ZE WSKAŹNIKIEM MOWY -->
+      <div class="relative w-7 h-7 rounded-lg mr-2 flex items-center justify-center font-bold text-[11px] bg-gradient-to-br ${palette.gradient} text-white shadow-xs border border-white/20 flex-shrink-0 pointer-events-none select-none">
+        ${initials}
+        <div class="client-speech-dot absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 ${s ? 'bg-emerald-500 animate-pulse ring-2 ring-white' : 'bg-slate-300'} rounded-full"></div>
+      </div>
+      
+      <!-- DANE UCZNIA + DIAGNOSTYKA SIECI -->
+      <div class="flex-1 overflow-hidden min-w-0 pr-1 pointer-events-none">
+        <div class="flex items-center justify-between gap-1">
+          <span class="font-bold text-xs text-slate-800 truncate leading-tight">${cleanName}</span>
+          <div class="client-net-badge-wrapper">${networkBadgeHtml}</div>
+        </div>
+        <div class="client-status-sub text-[10px] truncate mt-0.5">
+          ${statusSubHtml}
+        </div>
+      </div>
+
+      <!-- SZYBKI WYBÓR POKOJU -->
+      <div class="ml-1 flex-shrink-0 flex items-center gap-1">
+        <select onchange="assignClientToRoom('${client.ip}', this.value)"
+                onmousedown="event.stopPropagation()"
+                class="client-room-select text-[10px] bg-slate-50 hover:bg-white border border-slate-300 hover:border-[#1e3a5f] rounded-lg px-1.5 py-0.5 font-bold text-[#1e3a5f] cursor-pointer focus:outline-none shadow-xs"
+                title="Szybka zmiana pokoju dla tego ucznia">
+          ${roomOptions}
+        </select>
+        <div class="client-hand-btn-wrapper">${handBtnHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
 function updateUIWithData(clients) {
   if (isDragging || isInteractingWithCard) return;
 
-  const currentHash = JSON.stringify(
-    clients.map((c) => [c.ip, c.name, c.group, c.hand_raised, c.is_speaking, c.ping_ms, c.loss_pct, c.quality])
-  );
-  if (currentHash === lastRenderedClientsHash) {
-    return;
-  }
-  lastRenderedClientsHash = currentHash;
+  const sortedClients = [...clients].sort((a, b) => {
+    const nameA = a.name || '';
+    const nameB = b.name || '';
+    const cmp = nameA.localeCompare(nameB, 'pl', { numeric: true, sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+    return (a.ip || '').localeCompare(b.ip || '');
+  });
 
-  const roomZones = document.querySelectorAll('.room-drop-zone');
-  roomZones.forEach((z) => (z.innerHTML = ''));
+  const poolContainer = document.getElementById('clients-pool');
+  if (!poolContainer) return;
 
-  let poolHtml = '';
+  const validIps = new Set(sortedClients.map((c) => c.ip));
+
+  // Usuń karty odłączonych uczniów
+  document.querySelectorAll('.client-card').forEach((card) => {
+    const ip = card.dataset.ip;
+    if (!validIps.has(ip)) {
+      card.remove();
+    }
+  });
+
   let poolCount = 0;
 
-  clients.forEach((client) => {
-    const h = client.hand_raised;
-    const s = client.is_speaking;
-    const ping = client.ping_ms || 0;
-    const loss = client.loss_pct || 0;
-    const q = client.quality || 'excellent';
+  // Usuń stare placeholdery przed aktualizacją kart
+  document.querySelectorAll('.empty-zone-placeholder').forEach((p) => p.remove());
 
-    let pingBadgeClass = 'text-emerald-700 bg-emerald-50 border-emerald-200';
-    let dotClass = 'bg-emerald-500';
-    let statusText = 'Połączenie stabilne';
+  sortedClients.forEach((client) => {
+    const isPool = !client.group || client.group === 'Brak';
+    if (isPool) poolCount++;
 
-    if (q === 'poor') {
-      pingBadgeClass = 'text-red-700 bg-red-50 border-red-300 animate-pulse';
-      dotClass = 'bg-red-500';
-      statusText = 'Słaba jakość sieci (duże opóźnienie/utrata pakietów)';
-    } else if (q === 'fair') {
-      pingBadgeClass = 'text-amber-700 bg-amber-50 border-amber-300';
-      dotClass = 'bg-amber-500';
-      statusText = 'Średnia jakość sieci';
-    } else if (q === 'good') {
-      pingBadgeClass = 'text-sky-700 bg-sky-50 border-sky-300';
-      dotClass = 'bg-sky-500';
-      statusText = 'Dobra jakość sieci';
-    }
+    const targetZone = isPool
+      ? poolContainer
+      : document.querySelector(`.room-drop-zone[data-room="${client.group}"]`) || poolContainer;
 
-    const signalSvg = getSignalBarsSvg(q);
-    const networkBadge = `
-      <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-[10px] font-mono font-bold ${pingBadgeClass} flex-shrink-0 shadow-xs"
-           title="Jakość połączenia: ${statusText}&#10;Ping: ${ping} ms&#10;Utrata pakietów: ${loss}%&#10;Adres IP: ${client.ip}">
-        ${signalSvg}
-        <span>${ping} ms</span>
-        ${loss > 0 ? `<span class="text-red-600 font-extrabold ml-0.5">(${loss}%)</span>` : ''}
-      </div>
-    `;
+    let existingCard = document.querySelector(`.client-card[data-ip="${client.ip}"]`);
 
-
-    const bgRow = h
-      ? 'bg-amber-50 border-amber-300 shadow-sm ring-1 ring-amber-300'
-      : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm';
-
-    const avatarGlow = s
-      ? 'border-[#16a34a] bg-emerald-50 text-emerald-600 ring-2 ring-emerald-400'
-      : 'border-slate-200 bg-slate-100 text-slate-400';
-
-    let roomOptions = `<option value="Brak"${client.group === 'Brak' ? ' selected' : ''}>Poczekalnia</option>`;
-    roomsList.forEach((r) => {
-      roomOptions += `<option value="${r}"${client.group === r ? ' selected' : ''}>${r}</option>`;
-    });
-
-    const roomSelect = `
-      <select onchange="assignClientToRoom('${client.ip}', this.value)"
-              onmousedown="event.stopPropagation()"
-              class="text-[10px] bg-slate-50 hover:bg-white border border-slate-300 hover:border-[#1e3a5f] rounded-lg px-1.5 py-0.5 font-bold text-[#1e3a5f] cursor-pointer focus:outline-none shadow-xs"
-              title="Szybka zmiana pokoju dla tego ucznia">
-        ${roomOptions}
-      </select>
-    `;
-
-    const cleanName = (client.name || 'Uczeń').replace(/^(\p{Emoji_Presentation}|\p{Extended_Pictographic}|\p{Emoji})\s*/u, '').trim() || 'Uczeń';
-    const initials = getInitials(cleanName);
-    const palette = getDeterministicPalette(cleanName);
-    const safeClientName = cleanName.replace(/'/g, "\\'");
-
-    const cardHtml = `
-      <div onpointerdown="initCardDrag(event, '${client.ip}', '${safeClientName}')"
-           data-ip="${client.ip}"
-           class="group flex items-center p-2 rounded-xl cursor-grab active:cursor-grabbing transition border ${bgRow} select-none"
-           style="touch-action: none; -webkit-user-select: none; user-select: none;">
-        
-        <!-- DRAG HANDLE -->
-        <svg class="w-3.5 h-3.5 text-slate-300 group-hover:text-slate-600 mr-1.5 flex-shrink-0 fill-current pointer-events-none" viewBox="0 0 24 24">
-          <path d="M11 18c0 1.1-.9 2-2 2s-2-.9-2-2 .9-2 2-2 2 .9 2 2zm-2-8c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0-6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 4c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-        </svg>
-
-        <!-- AWATAR ZE WSKAŹNIKIEM MOWY -->
-        <div class="relative w-7 h-7 rounded-lg mr-2 flex items-center justify-center font-bold text-[11px] bg-gradient-to-br ${palette.gradient} text-white shadow-xs border border-white/20 flex-shrink-0 pointer-events-none select-none">
-          ${initials}
-          <div class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 ${s ? 'bg-emerald-500 animate-pulse ring-2 ring-white' : 'bg-slate-300'} rounded-full"></div>
-        </div>
-        
-        <!-- DANE UCZNIA + DIAGNOSTYKA SIECI -->
-        <div class="flex-1 overflow-hidden min-w-0 pr-1 pointer-events-none">
-          <div class="flex items-center justify-between gap-1">
-            <span class="font-bold text-xs text-slate-800 truncate leading-tight">${cleanName}</span>
-            ${networkBadge}
-          </div>
-          <div class="text-[10px] truncate mt-0.5">
-            ${
-              h
-                ? '<span class="inline-flex items-center gap-1 font-bold text-amber-700"><svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg> Prośba o pomoc</span>'
-                : s
-                ? '<span class="text-emerald-600 font-bold">Mówi w pokoju...</span>'
-                : `<span class="text-slate-400 font-medium">${client.group !== 'Brak' ? client.group : 'Poczekalnia'}</span>`
-            }
-          </div>
-        </div>
-
-        <!-- SZYBKI WYBÓR POKOJU (ALTERNATYWA DLA DRAG&DROP) -->
-        <div class="ml-1 flex-shrink-0 flex items-center gap-1">
-          ${roomSelect}
-          ${
-            h
-              ? `
-            <button onclick="clearHand('${client.ip}')" class="p-1 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-900 transition active:scale-95 cursor-pointer flex-shrink-0" title="Odznacz pomoc">
-              <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
-            </button>
-          `
-              : ''
-          }
-        </div>
-      </div>
-    `;
-
-    const roomZone = document.querySelector(`.room-drop-zone[data-room="${client.group}"]`);
-    if (roomZone) {
-      roomZone.innerHTML += cardHtml;
+    if (!existingCard) {
+      const template = document.createElement('template');
+      template.innerHTML = renderClientCard(client).trim();
+      existingCard = template.content.firstElementChild;
+      targetZone.appendChild(existingCard);
     } else {
-      poolHtml += cardHtml;
-      poolCount++;
+      // Jeśli uczeń zmienił pokój, przenieś węzeł DOM do nowej strefy
+      if (existingCard.parentElement !== targetZone) {
+        targetZone.appendChild(existingCard);
+      }
+
+      // Aktualizacja atrybutów bez niszczenia DOM
+      const h = client.hand_raised;
+      const s = client.is_speaking;
+      const ping = client.ping_ms || 0;
+      const loss = client.loss_pct || 0;
+      const q = client.quality || 'excellent';
+
+      // 1. Tło wiersza
+      existingCard.className = `client-card group flex items-center p-2 rounded-xl cursor-grab active:cursor-grabbing transition border ${
+        h
+          ? 'bg-amber-50 border-amber-300 shadow-sm ring-1 ring-amber-300'
+          : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm'
+      } select-none`;
+
+      // 2. Wskaźnik mowy na awatarze
+      const dot = existingCard.querySelector('.client-speech-dot');
+      if (dot) {
+        dot.className = `client-speech-dot absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 ${
+          s ? 'bg-emerald-500 animate-pulse ring-2 ring-white' : 'bg-slate-300'
+        } rounded-full`;
+      }
+
+      // 3. Wskaźnik pingu / jakości sieci
+      const netWrapper = existingCard.querySelector('.client-net-badge-wrapper');
+      if (netWrapper) {
+        let pingBadgeClass = 'text-emerald-700 bg-emerald-50 border-emerald-200';
+        let statusText = 'Połączenie stabilne';
+        if (q === 'poor') {
+          pingBadgeClass = 'text-red-700 bg-red-50 border-red-300 animate-pulse';
+          statusText = 'Słaba jakość sieci (duże opóźnienie/utrata pakietów)';
+        } else if (q === 'fair') {
+          pingBadgeClass = 'text-amber-700 bg-amber-50 border-amber-300';
+          statusText = 'Średnia jakość sieci';
+        } else if (q === 'good') {
+          pingBadgeClass = 'text-sky-700 bg-sky-50 border-sky-300';
+          statusText = 'Dobra jakość sieci';
+        }
+        netWrapper.innerHTML = `
+          <div class="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border text-[10px] font-mono font-bold ${pingBadgeClass} flex-shrink-0 shadow-xs"
+               title="Jakość połączenia: ${statusText}&#10;Ping: ${ping} ms&#10;Utrata pakietów: ${loss}%&#10;Adres IP: ${client.ip}">
+            ${getSignalBarsSvg(q)}
+            <span>${ping} ms</span>
+            ${loss > 0 ? `<span class="text-red-600 font-extrabold ml-0.5">(${loss}%)</span>` : ''}
+          </div>
+        `;
+      }
+
+      // 4. Podtytuł statusu (mówi / pomoc / pokój)
+      const sub = existingCard.querySelector('.client-status-sub');
+      if (sub) {
+        sub.innerHTML = h
+          ? '<span class="inline-flex items-center gap-1 font-bold text-amber-700"><svg class="w-3 h-3 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg> Prośba o pomoc</span>'
+          : s
+          ? '<span class="text-emerald-600 font-bold">Mówi w pokoju...</span>'
+          : `<span class="text-slate-400 font-medium">${client.group !== 'Brak' ? client.group : 'Poczekalnia'}</span>`;
+      }
+
+      // 5. Select pokoju (nie nadpisuj wartości, jeśli nauczyciel aktualnie go rozwija/kliknął)
+      const select = existingCard.querySelector('.client-room-select');
+      if (select && document.activeElement !== select && select.value !== client.group) {
+        select.value = client.group;
+      }
+
+      // 6. Przycisk odznaczania ręki
+      const handWrapper = existingCard.querySelector('.client-hand-btn-wrapper');
+      if (handWrapper) {
+        handWrapper.innerHTML = h
+          ? `<button onclick="clearHand('${client.ip}')" class="p-1 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-900 transition active:scale-95 cursor-pointer flex-shrink-0" title="Odznacz pomoc">
+              <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24"><path d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.1 0-2.1-.4-2.8-1.2L2 15.9l1.4-1.4c.4-.4.9-.6 1.4-.6h.4l5.2 2.1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V3.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5V12h1V2c0-.8.7-1.5 1.5-1.5S20 1.2 20 2v10h1V5.5c0-.8.7-1.5 1.5-1.5s1.5.7 1.5 1.5z"/></svg>
+            </button>`
+          : '';
+      }
     }
   });
 
   // Uzupełnienie pustych pokoi estetycznym placeholderem
-  roomZones.forEach((z) => {
-    if (!z.innerHTML.trim()) {
+  document.querySelectorAll('.room-drop-zone').forEach((z) => {
+    if (!z.querySelector('.client-card')) {
       z.innerHTML = `
-        <div class="h-full border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-3 text-center text-slate-400 select-none pointer-events-none">
+        <div class="empty-zone-placeholder h-full border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-3 text-center text-slate-400 select-none pointer-events-none">
           <svg class="w-5 h-5 text-slate-300 mb-1 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
           <span class="text-[11px] text-slate-400 pointer-events-none">Przeciągnij uczniów tutaj</span>
         </div>
@@ -1187,16 +1340,16 @@ function updateUIWithData(clients) {
   const poolBadge = document.getElementById('pool-count-badge');
   if (poolBadge) poolBadge.innerText = poolCount;
 
-  document.getElementById('clients-pool').innerHTML =
-    poolHtml ||
-    `
-    <div class="h-40 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-4 text-center text-slate-400 select-none pointer-events-none">
-      <svg class="w-6 h-6 text-slate-300 mb-1.5 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-      </svg>
-      <span class="text-xs font-semibold text-slate-500 pointer-events-none">Poczekalnia jest pusta</span>
-      <span class="text-[10px] text-slate-400 mt-0.5 pointer-events-none">Uczniowie pojawią się po połączeniu</span>
-    </div>
-  `;
+  if (!poolContainer.querySelector('.client-card')) {
+    poolContainer.innerHTML = `
+      <div class="empty-zone-placeholder h-40 border border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center p-4 text-center text-slate-400 select-none pointer-events-none">
+        <svg class="w-6 h-6 text-slate-300 mb-1.5 fill-current pointer-events-none" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+        </svg>
+        <span class="text-xs font-semibold text-slate-500 pointer-events-none">Poczekalnia jest pusta</span>
+        <span class="text-[10px] text-slate-400 mt-0.5 pointer-events-none">Uczniowie pojawią się po połączeniu</span>
+      </div>
+    `;
+  }
 }
 
 // -------------------------------------------------------------

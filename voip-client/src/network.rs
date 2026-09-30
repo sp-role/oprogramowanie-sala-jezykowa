@@ -155,7 +155,19 @@ pub fn discover_server(state: SharedClientState) {
                 match socket.recv_from(&mut buf) {
                     Ok((size, _addr)) => {
                         let msg = String::from_utf8_lossy(&buf[..size]);
-                        if msg.starts_with("VOIP_PONG") || msg.starts_with("VOIP_SERVER_ANNOUNCE") || msg.starts_with("VOIP_HERE") {
+                        if msg.starts_with("VOIP_SERVER_SHUTDOWN") || msg.starts_with("VOIP_DISCONNECT") {
+                            let mut st = state.lock().unwrap();
+                            println!("[KLIENT-DISC] Otrzymano sygnał wyłączenia serwera (VOIP_SERVER_SHUTDOWN). Natychmiastowy reset sesji.");
+                            st.server_ip = None;
+                            st.group = None;
+                            st.is_speaking = false;
+                            st.is_muted_by_teacher = false;
+                            st.room_members.clear();
+                            st.hand_raised = false;
+                            st.is_joined = false;
+                            st.last_server_packet = 0.0;
+                            break;
+                        } else if msg.starts_with("VOIP_PONG") || msg.starts_with("VOIP_SERVER_ANNOUNCE") || msg.starts_with("VOIP_HERE") {
                             let mut st = state.lock().unwrap();
                             st.last_server_packet = current_time();
                         }

@@ -3,7 +3,11 @@
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+static IS_ACTIVATED_CACHED: AtomicBool = AtomicBool::new(false);
+static IS_ACTIVATED_CHECKED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -273,10 +277,22 @@ pub fn save_license(hardware_id: &str, code: &str) -> Result<(), String> {
         token
     );
     fs::write(&path, content).map_err(|e| format!("Błąd zapisu licencji: {}", e))?;
+    IS_ACTIVATED_CACHED.store(true, Ordering::Relaxed);
+    IS_ACTIVATED_CHECKED.store(true, Ordering::Relaxed);
     Ok(())
 }
 
 pub fn is_activated() -> bool {
+    if IS_ACTIVATED_CHECKED.load(Ordering::Relaxed) {
+        return IS_ACTIVATED_CACHED.load(Ordering::Relaxed);
+    }
+    let activated = check_activation_from_disk();
+    IS_ACTIVATED_CACHED.store(activated, Ordering::Relaxed);
+    IS_ACTIVATED_CHECKED.store(true, Ordering::Relaxed);
+    activated
+}
+
+fn check_activation_from_disk() -> bool {
     let current_hw_id = get_hardware_id();
     let path = get_license_file_path();
     if let Ok(content) = fs::read_to_string(&path) {

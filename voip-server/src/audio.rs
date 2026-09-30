@@ -164,20 +164,20 @@ pub fn run_media_player_streamer(
             let _ = packet.write_i16::<BigEndian>((clamped * 32767.0) as i16);
         }
 
-        // Wysyłanie do wskazanych uczniów (wszystkich lub wybranego pokoju)
-        {
+        // Wysyłanie do wskazanych uczniów (wszystkich lub wybranego pokoju) poza blokadą mutexa
+        let target_addrs: Vec<std::net::SocketAddr> = {
             let st = state.lock().unwrap();
             if target == "all" || target.is_empty() || target == "Wszyscy" {
-                for target_addr in st.ip_to_addr.values() {
-                    let _ = socket.send_to(&packet, target_addr);
-                }
+                st.ip_to_addr.values().copied().collect()
             } else if let Some(members) = st.groups.get(&target) {
-                for ip in members {
-                    if let Some(target_addr) = st.ip_to_addr.get(ip) {
-                        let _ = socket.send_to(&packet, target_addr);
-                    }
-                }
+                members.iter().filter_map(|ip| st.ip_to_addr.get(ip).copied()).collect()
+            } else {
+                vec![]
             }
+        };
+
+        for target_addr in target_addrs {
+            let _ = socket.send_to(&packet, target_addr);
         }
 
         // Odsłuch bezpośredni w słuchawkach nauczyciela (miksowanie)
@@ -193,6 +193,36 @@ pub fn run_media_player_streamer(
                 buf.drain(..drain_count);
             }
             buf.extend(samples_to_send);
+        }
+    }
+}
+
+struct TeacherMicProcessor {
+    prev_x: f32,
+    prev_y: f32,
+}
+
+impl TeacherMicProcessor {
+    fn new() -> Self {
+        Self { prev_x: 0.0, prev_y: 0.0 }
+    }
+
+    fn process(&mut self, samples: &mut [f32]) {
+        let r = 0.988f32; // High-Pass 85 Hz DC Blocker
+        for s in samples.iter_mut() {
+            let x = *s;
+            let y = x - self.prev_x + r * self.prev_y;
+            self.prev_x = x;
+            self.prev_y = y;
+
+            // Soft-limiter
+            *s = if y > 1.25 {
+                0.99
+            } else if y < -1.25 {
+                -0.99
+            } else {
+                y - (y * y * y) * 0.15
+            };
         }
     }
 }
@@ -235,6 +265,9 @@ pub fn capture_and_broadcast(state: SharedServerState) {
         let stream_error_cb = stream_error.clone();
         let state_mic = state.clone();
         let mut seq_num = 0u32;
+        let mut mic_proc = TeacherMicProcessor::new();
+        let mut accum_samples = VecDeque::<f32>::with_capacity(4800);
+        const FRAME_SIZE: usize = 960; // 20ms przy 48000 Hz
 
         let err_fn = move |err| {
             eprintln!("[SERVER-MIC] Błąd strumienia: {}", err);
@@ -242,14 +275,19 @@ pub fn capture_and_broadcast(state: SharedServerState) {
         };
 
         let mut on_mono_samples = move |mono_samples: &[f32]| {
-            let st = state_mic.lock().unwrap();
-            if !st.is_broadcasting {
+            let (is_broadcasting, target_addrs) = {
+                let st = state_mic.lock().unwrap();
+                if !st.is_broadcasting {
+                    (false, Vec::new())
+                } else {
+                    (true, st.ip_to_addr.values().copied().collect())
+                }
+            };
+
+            if !is_broadcasting {
+                accum_samples.clear();
                 return;
             }
-
-            seq_num += 1;
-            let name_bytes = b"Nauczyciel";
-            let name_len = name_bytes.len() as u8;
 
             let samples_48k: Vec<f32> = if in_sample_rate != SAMPLE_RATE && in_sample_rate > 0 {
                 let ratio = in_sample_rate as f64 / SAMPLE_RATE as f64;
@@ -269,19 +307,30 @@ pub fn capture_and_broadcast(state: SharedServerState) {
                 mono_samples.to_vec()
             };
 
-            let mut packet = Vec::with_capacity(13 + name_len as usize + samples_48k.len() * 2);
-            let _ = packet.write_u32::<BigEndian>(seq_num);
-            let _ = packet.write_f64::<BigEndian>(current_time());
-            packet.push(name_len);
-            packet.extend_from_slice(name_bytes);
+            accum_samples.extend(samples_48k);
 
-            for &sample in &samples_48k {
-                let clamped = sample.clamp(-1.0, 1.0);
-                let _ = packet.write_i16::<BigEndian>((clamped * 32767.0) as i16);
-            }
+            while accum_samples.len() >= FRAME_SIZE {
+                let mut frame: Vec<f32> = accum_samples.drain(..FRAME_SIZE).collect();
+                mic_proc.process(&mut frame);
 
-            for target_addr in st.ip_to_addr.values() {
-                let _ = socket.send_to(&packet, target_addr);
+                seq_num = seq_num.wrapping_add(1);
+                let name_bytes = b"Nauczyciel";
+                let name_len = name_bytes.len() as u8;
+
+                let mut packet = Vec::with_capacity(13 + name_len as usize + frame.len() * 2);
+                let _ = packet.write_u32::<BigEndian>(seq_num);
+                let _ = packet.write_f64::<BigEndian>(current_time());
+                packet.push(name_len);
+                packet.extend_from_slice(name_bytes);
+
+                for &sample in &frame {
+                    let clamped = sample.clamp(-1.0, 1.0);
+                    let _ = packet.write_i16::<BigEndian>((clamped * 32767.0) as i16);
+                }
+
+                for target_addr in &target_addrs {
+                    let _ = socket.send_to(&packet, target_addr);
+                }
             }
         };
 
@@ -359,28 +408,92 @@ pub fn play_teacher_audio(audio_streams: TeacherAudioBuffer) {
         };
 
         let out_channels = supported_out_config.channels() as usize;
+        let out_sample_rate = supported_out_config.sample_rate().0;
         let out_config = supported_out_config.config();
         let streams_playback = audio_streams.clone();
         let stream_error = Arc::new(AtomicBool::new(false));
         let stream_error_cb = stream_error.clone();
 
+        let mut accum: f64 = 0.0;
+        let mut last_mixed: f32 = 0.0;
+        let mut prev_mixed: f32 = 0.0;
+        let mut buffering_map: HashMap<String, bool> = HashMap::new();
+        let mut last_seen_map: HashMap<String, std::time::Instant> = HashMap::new();
+
+        let ratio = if out_sample_rate > 0 {
+            SAMPLE_RATE as f64 / out_sample_rate as f64
+        } else {
+            1.0
+        };
+
+        #[inline]
+        fn soft_limit(x: f32) -> f32 {
+            if x > 1.25 {
+                0.99
+            } else if x < -1.25 {
+                -0.99
+            } else {
+                x - (x * x * x) * 0.15
+            }
+        }
+
         let stream = device.build_output_stream(
             &out_config,
             move |out_data: &mut [f32], _| {
-                let mut streams = streams_playback.lock().unwrap();
+                let mut streams = match streams_playback.try_lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return, // Jeśli mutex zajęty na ułamek sekundy, nie blokuj wątku audio
+                };
+
+                let now_inst = std::time::Instant::now();
                 for frame in out_data.chunks_mut(out_channels) {
-                    let mut mixed = 0.0f32;
-                    for (_, buf) in streams.iter_mut() {
-                        if let Some(s) = buf.pop_front() {
-                            mixed += s;
+                    accum += ratio;
+                    while accum >= 1.0 {
+                        prev_mixed = last_mixed;
+                        let mut step_mixed = 0.0f32;
+                        for (key, buf) in streams.iter_mut() {
+                            if !buf.is_empty() {
+                                last_seen_map.insert(key.clone(), now_inst);
+                            }
+                            let is_media = key.starts_with("__");
+                            let is_buf = buffering_map.entry(key.clone()).or_insert(!is_media);
+
+                            if *is_buf {
+                                if is_media || buf.len() >= 1440 {
+                                    *is_buf = false;
+                                }
+                            }
+
+                            if !*is_buf {
+                                if let Some(s) = buf.pop_front() {
+                                    step_mixed += s;
+                                } else {
+                                    if !is_media {
+                                        *is_buf = true;
+                                    }
+                                }
+                            }
                         }
+                        last_mixed = step_mixed;
+                        accum -= 1.0;
                     }
-                    let sample_val = mixed.clamp(-1.0, 1.0);
+
+                    let frac = accum.clamp(0.0, 1.0) as f32;
+                    let interpolated = prev_mixed * (1.0 - frac) + last_mixed * frac;
+                    let sample_val = soft_limit(interpolated);
+
                     for ch in frame.iter_mut() {
                         *ch = sample_val;
                     }
                 }
-                streams.retain(|_, buf| !buf.is_empty());
+
+                streams.retain(|key, buf| {
+                    !buf.is_empty()
+                        || last_seen_map
+                            .get(key)
+                            .map(|t| t.elapsed() < Duration::from_millis(2500))
+                            .unwrap_or(false)
+                });
             },
             move |err| {
                 eprintln!("[SERVER-AUDIO-OUT] Błąd strumienia: {}", err);

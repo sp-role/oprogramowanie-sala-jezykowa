@@ -1,6 +1,4 @@
-use byteorder::{BigEndian, ReadBytesExt};
 use std::collections::{HashSet, VecDeque};
-use std::io::Cursor;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -84,6 +82,27 @@ pub fn get_local_ipv4_addrs() -> Vec<Ipv4Addr> {
     get_local_v4_interfaces().into_iter().map(|i| i.ip).collect()
 }
 
+pub fn get_audio_broadcast_addrs() -> Vec<SocketAddr> {
+    let mut targets = Vec::new();
+
+    if let Ok(addr) = format!("255.255.255.255:{}", PORT_AUDIO).parse() {
+        targets.push(addr);
+    }
+    if let Ok(addr) = format!("127.0.0.1:{}", PORT_AUDIO).parse() {
+        targets.push(addr);
+    }
+
+    for iface in get_local_v4_interfaces() {
+        if let Some(bcast) = iface.broadcast {
+            targets.push(SocketAddr::V4(SocketAddrV4::new(bcast, PORT_AUDIO)));
+        }
+    }
+
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
 pub fn get_discovery_broadcast_addrs() -> Vec<SocketAddr> {
     let mut targets = Vec::new();
 
@@ -103,6 +122,40 @@ pub fn get_discovery_broadcast_addrs() -> Vec<SocketAddr> {
     targets.sort();
     targets.dedup();
     targets
+}
+
+pub fn broadcast_shutdown(state: &SharedServerState) {
+    let st = state.lock().unwrap();
+    let msg = b"VOIP_SERVER_SHUTDOWN";
+    println!("[SERWER] Wysyłanie sygnału wyłączenia serwera (VOIP_SERVER_SHUTDOWN)...");
+
+    let fallback_socket = UdpSocket::bind("0.0.0.0:0").ok();
+    if let Some(ref s) = fallback_socket {
+        let _ = s.set_broadcast(true);
+    }
+
+    let socket = st.audio_socket.as_deref().or(fallback_socket.as_ref());
+
+    if let Some(sock) = socket {
+        // 1. Wyślij bezpośrednio do każdego znanego klienta (3 razy dla niezawodności UDP)
+        for target_addr in st.ip_to_addr.values() {
+            for _ in 0..3 {
+                let _ = sock.send_to(msg, target_addr);
+            }
+        }
+
+        // 2. Wyślij również broadcast na port audio i discovery
+        for target in get_audio_broadcast_addrs() {
+            for _ in 0..2 {
+                let _ = sock.send_to(msg, target);
+            }
+        }
+        for target in get_discovery_broadcast_addrs() {
+            for _ in 0..2 {
+                let _ = sock.send_to(msg, target);
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -160,6 +213,8 @@ pub fn run_discovery_server(state: SharedServerState) {
 
     let mut buf = [0u8; 128];
     let mut last_announce = std::time::Instant::now() - Duration::from_secs(5);
+    let mut interfaces = get_local_v4_interfaces();
+    let mut last_iface_refresh = std::time::Instant::now();
 
     loop {
         if !crate::licensing::is_activated() {
@@ -168,7 +223,11 @@ pub fn run_discovery_server(state: SharedServerState) {
             continue;
         }
 
-        let interfaces = get_local_v4_interfaces();
+        if last_iface_refresh.elapsed() >= Duration::from_secs(15) {
+            interfaces = get_local_v4_interfaces();
+            last_iface_refresh = std::time::Instant::now();
+        }
+
         let primary_ip = interfaces.first().map(|i| i.ip).unwrap_or(Ipv4Addr::new(127, 0, 0, 1));
 
         if last_announce.elapsed() >= Duration::from_secs(2) {
@@ -220,14 +279,22 @@ pub fn run_discovery_server(state: SharedServerState) {
                     let reply_msg = format!("VOIP_PONG:{}:{}", reply_ip, PORT_AUDIO);
                     let _ = socket.send_to(reply_msg.as_bytes(), addr);
                 } else if msg.starts_with("VOIP_HAND_DOWN") {
-                    let ip = addr.ip().to_string();
                     let mut st = state.lock().unwrap();
+                    let ip = if addr.ip().is_loopback() {
+                        st.client_stats.keys().find(|k| k.starts_with("127.0.0.1")).cloned().unwrap_or_else(|| addr.ip().to_string())
+                    } else {
+                        addr.ip().to_string()
+                    };
                     if let Some(stat) = st.client_stats.get_mut(&ip) {
                         stat.hand_raised = false;
                     }
                 } else if msg.starts_with("VOIP_HAND") {
-                    let ip = addr.ip().to_string();
                     let mut st = state.lock().unwrap();
+                    let ip = if addr.ip().is_loopback() {
+                        st.client_stats.keys().find(|k| k.starts_with("127.0.0.1")).cloned().unwrap_or_else(|| addr.ip().to_string())
+                    } else {
+                        addr.ip().to_string()
+                    };
                     if let Some(stat) = st.client_stats.get_mut(&ip) {
                         stat.hand_raised = true;
                     }
@@ -298,7 +365,11 @@ pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now:
                 }
             })
             .collect();
-        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list.sort_by(|a, b| {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.ip.cmp(&b.ip))
+        });
         return list;
     }
     if let Some(members) = st.groups.get(room) {
@@ -324,7 +395,11 @@ pub fn get_room_members_payload(st: &crate::state::ServerState, room: &str, now:
                 }
             })
             .collect();
-        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list.sort_by(|a, b| {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.ip.cmp(&b.ip))
+        });
         list
     } else {
         vec![]
@@ -357,7 +432,11 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
         }
 
         if let Ok((size, addr)) = socket.recv_from(&mut buf) {
-            let sender_ip = addr.ip().to_string();
+            let sender_ip = if addr.ip().is_loopback() {
+                format!("{}:{}", addr.ip(), addr.port())
+            } else {
+                addr.ip().to_string()
+            };
             let recv_time = current_time();
             let data = &buf[..size];
 
@@ -410,124 +489,161 @@ pub fn run_udp_server(state: SharedServerState, teacher_audio_buffer: TeacherAud
             }
 
             if size >= 13 {
-                let mut cursor = Cursor::new(&data[0..12]);
-                let seq_num = cursor.read_u32::<BigEndian>().unwrap_or(0);
-                let send_time = cursor.read_f64::<BigEndian>().unwrap_or(0.0);
+                let seq_num = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                let send_time = f64::from_be_bytes([
+                    data[4], data[5], data[6], data[7],
+                    data[8], data[9], data[10], data[11],
+                ]);
                 let name_len = data[12] as usize;
                 let header_offset = 13 + name_len;
 
-                let mut max_amp: i16 = 0;
                 let has_audio = size > header_offset;
+                let mut max_amp: i16 = 0;
                 if has_audio {
-                    let mut audio_cursor = Cursor::new(&data[header_offset..size]);
-                    while let Ok(sample_i16) = audio_cursor.read_i16::<BigEndian>() {
-                        max_amp = max_amp.max(sample_i16.saturating_abs());
-                    }
-                }
-
-                let mut st = state.lock().unwrap();
-                st.ip_to_addr.insert(sender_ip.clone(), addr);
-
-                let name_str = if size >= header_offset && name_len > 0 {
-                    std::str::from_utf8(&data[13..header_offset]).unwrap_or("").trim()
-                } else {
-                    ""
-                };
-
-                let display_name = if name_str.is_empty() {
-                    format!("Uczeń ({})", sender_ip)
-                } else {
-                    name_str.to_string()
-                };
-
-                let is_new = !st.ip_to_group.contains_key(&sender_ip);
-                st.ip_to_name.insert(sender_ip.clone(), display_name.clone());
-                st.total_bytes_sec += size;
-
-                if is_new {
-                    println!("[SERWER-AUDIO] Nowy uczeń zarejestrowany: {} ({})", display_name, sender_ip);
-                    st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string());
-                }
-
-                {
-                    let client_stat = st.client_stats.entry(sender_ip.clone()).or_insert(ClientStat {
-                        last_seq: seq_num,
-                        packets_recv: 0,
-                        packets_lost: 0,
-                        latencies: vec![],
-                        last_seen: recv_time,
-                        hand_raised: false,
-                        last_spoken: 0.0,
-                    });
-                    client_stat.last_seen = recv_time;
-                    client_stat.packets_recv += 1;
-
-                    if max_amp > 800 {
-                        client_stat.last_spoken = recv_time;
-                    }
-
-                    let latency = (recv_time - send_time) * 1000.0;
-                    if (0.0..2000.0).contains(&latency) {
-                        client_stat.latencies.push(latency);
-                        if client_stat.latencies.len() > 15 {
-                            client_stat.latencies.remove(0);
+                    for chunk in data[header_offset..size].chunks_exact(2) {
+                        let sample_i16 = i16::from_be_bytes([chunk[0], chunk[1]]);
+                        let abs_val = sample_i16.saturating_abs();
+                        if abs_val > max_amp {
+                            max_amp = abs_val;
                         }
                     }
-                    if seq_num > client_stat.last_seq + 1 {
-                        client_stat.packets_lost += seq_num - client_stat.last_seq - 1;
-                    }
-                    client_stat.last_seq = seq_num;
                 }
 
-                if is_new {
-                    let members = get_room_members_payload(&st, "Brak", recv_time);
-                    let members_json = serde_json::to_string(&members).unwrap_or_default();
-                    let msg = format!("VOIP_ROOM:Brak|{}", members_json);
-                    let _ = socket.send_to(msg.as_bytes(), addr);
-                    let other_ips: Vec<String> = st.ip_to_group.iter().filter(|(k, v)| *v == "Brak" && *k != &sender_ip).map(|(k, _)| k.clone()).collect();
-                    for other_ip in other_ips {
-                        if let Some(target_addr) = st.ip_to_addr.get(&other_ip) {
-                            let _ = socket.send_to(msg.as_bytes(), target_addr);
+                let (is_new, group_name_opt, room_targets, pool_notify_targets, should_listen_teacher) = {
+                    let mut st = state.lock().unwrap();
+                    st.ip_to_addr.insert(sender_ip.clone(), addr);
+
+                    let name_str = if size >= header_offset && name_len > 0 {
+                        std::str::from_utf8(&data[13..header_offset]).unwrap_or("").trim()
+                    } else {
+                        ""
+                    };
+
+                    let display_name = if name_str.is_empty() {
+                        format!("Uczeń ({})", sender_ip)
+                    } else {
+                        name_str.to_string()
+                    };
+
+                    let is_new = !st.ip_to_group.contains_key(&sender_ip);
+                    st.ip_to_name.insert(sender_ip.clone(), display_name.clone());
+                    st.total_bytes_sec += size;
+
+                    if is_new {
+                        println!("[SERWER-AUDIO] Nowy uczeń zarejestrowany: {} ({})", display_name, sender_ip);
+                        st.ip_to_group.insert(sender_ip.clone(), "Brak".to_string());
+                    }
+
+                    {
+                        let client_stat = st.client_stats.entry(sender_ip.clone()).or_insert(ClientStat {
+                            last_seq: seq_num,
+                            packets_recv: 0,
+                            packets_lost: 0,
+                            latencies: vec![],
+                            last_seen: recv_time,
+                            hand_raised: false,
+                            last_spoken: 0.0,
+                        });
+                        client_stat.last_seen = recv_time;
+                        client_stat.packets_recv += 1;
+
+                        if max_amp > 800 {
+                            client_stat.last_spoken = recv_time;
+                        }
+
+                        let latency = (recv_time - send_time) * 1000.0;
+                        if (0.0..2000.0).contains(&latency) {
+                            client_stat.latencies.push(latency);
+                            if client_stat.latencies.len() > 15 {
+                                client_stat.latencies.remove(0);
+                            }
+                        }
+
+                        // Bezpieczna kalkulacja utraty pakietów (odporna na out-of-order)
+                        if client_stat.last_seq == 0 {
+                            client_stat.last_seq = seq_num;
+                        } else if seq_num > client_stat.last_seq {
+                            let diff = seq_num - client_stat.last_seq;
+                            if diff > 1 && diff < 500 {
+                                client_stat.packets_lost += diff - 1;
+                            }
+                            client_stat.last_seq = seq_num;
                         }
                     }
-                } else if !has_audio {
-                    let cur_room = st.ip_to_group.get(&sender_ip).cloned().unwrap_or_else(|| "Brak".to_string());
-                    let members = get_room_members_payload(&st, &cur_room, recv_time);
-                    let members_json = serde_json::to_string(&members).unwrap_or_default();
-                    let pong = format!("VOIP_PONG:{}|{}", cur_room, members_json);
-                    let _ = socket.send_to(pong.as_bytes(), addr);
-                }
 
-                // Routing audio do innych uczniów
-                if has_audio && !st.is_broadcasting {
-                    if let Some(group_name) = st.ip_to_group.get(&sender_ip) {
-                        if let Some(members) = st.groups.get(group_name).cloned() {
+                    let mut pool_targets = Vec::new();
+                    if is_new {
+                        let other_ips: Vec<String> = st.ip_to_group.iter().filter(|(k, v)| *v == "Brak" && *k != &sender_ip).map(|(k, _)| k.clone()).collect();
+                        for other_ip in other_ips {
+                            if let Some(target_addr) = st.ip_to_addr.get(&other_ip) {
+                                pool_targets.push(*target_addr);
+                            }
+                        }
+                    }
+
+                    let grp_name = st.ip_to_group.get(&sender_ip).cloned().unwrap_or_else(|| "Brak".to_string());
+                    let mut targets = Vec::new();
+                    let mut listen_teacher = false;
+
+                    if has_audio && !st.is_broadcasting {
+                        if let Some(members) = st.groups.get(&grp_name) {
                             for target_ip in members {
-                                if target_ip != sender_ip {
-                                    if let Some(target_addr) = st.ip_to_addr.get(&target_ip) {
-                                        let _ = socket.send_to(data, target_addr);
+                                if target_ip != &sender_ip {
+                                    if let Some(target_addr) = st.ip_to_addr.get(target_ip) {
+                                        targets.push(*target_addr);
                                     }
                                 }
                             }
                         }
-
-                        if st.listening_room.as_ref() == Some(group_name) {
-                            let mut audio_cursor = Cursor::new(&data[header_offset..size]);
-                            let mut decoded = Vec::new();
-                            while let Ok(sample_i16) = audio_cursor.read_i16::<BigEndian>() {
-                                decoded.push((sample_i16 as f32) / 32767.0);
-                            }
-                            let mut t_streams = teacher_audio_buffer.lock().unwrap();
-                            let buf = t_streams.entry(sender_ip.clone()).or_insert_with(VecDeque::new);
-
-                            let max_jitter_samples = (SAMPLE_RATE as usize * 150) / 1000;
-                            let target_jitter_samples = (SAMPLE_RATE as usize * 40) / 1000;
-                            if buf.len() > max_jitter_samples {
-                                let drain_count = buf.len() - target_jitter_samples;
-                                buf.drain(..drain_count);
-                            }
-                            buf.extend(decoded);
+                        if st.listening_room.as_ref() == Some(&grp_name) {
+                            listen_teacher = true;
                         }
+                    }
+
+                    (is_new, grp_name, targets, pool_targets, listen_teacher)
+                }; // Mutex zwolniony!
+
+                if is_new {
+                    let st = state.lock().unwrap();
+                    let members = get_room_members_payload(&st, "Brak", recv_time);
+                    drop(st);
+                    let members_json = serde_json::to_string(&members).unwrap_or_default();
+                    let msg = format!("VOIP_ROOM:Brak|{}", members_json);
+                    let _ = socket.send_to(msg.as_bytes(), addr);
+                    for pool_addr in pool_notify_targets {
+                        let _ = socket.send_to(msg.as_bytes(), pool_addr);
+                    }
+                } else if !has_audio {
+                    let st = state.lock().unwrap();
+                    let members = get_room_members_payload(&st, &group_name_opt, recv_time);
+                    drop(st);
+                    let members_json = serde_json::to_string(&members).unwrap_or_default();
+                    let pong = format!("VOIP_PONG:{}|{}", group_name_opt, members_json);
+                    let _ = socket.send_to(pong.as_bytes(), addr);
+                }
+
+                // Routing pakietów audio do uczniów w pokoju poza blokadą mutexa
+                if has_audio {
+                    for target_addr in room_targets {
+                        let _ = socket.send_to(data, target_addr);
+                    }
+
+                    if should_listen_teacher {
+                        let decoded: Vec<f32> = data[header_offset..size]
+                            .chunks_exact(2)
+                            .map(|chunk| (i16::from_be_bytes([chunk[0], chunk[1]]) as f32) / 32767.0)
+                            .collect();
+
+                        let mut t_streams = teacher_audio_buffer.lock().unwrap();
+                        let buf = t_streams.entry(sender_ip.clone()).or_insert_with(VecDeque::new);
+
+                        let max_jitter_samples = (SAMPLE_RATE as usize * 150) / 1000;
+                        let target_jitter_samples = (SAMPLE_RATE as usize * 40) / 1000;
+                        if buf.len() > max_jitter_samples {
+                            let drain_count = buf.len() - target_jitter_samples;
+                            buf.drain(..drain_count);
+                        }
+                        buf.extend(decoded);
                     }
                 }
             }
@@ -637,6 +753,12 @@ pub fn run_dashboard_updater(
                 });
             }
         }
+
+        active_clients.sort_by(|a, b| {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.ip.cmp(&b.ip))
+        });
 
         let loss_percentage = if total_recv + total_lost > 0 {
             (total_lost as f64 / (total_recv + total_lost) as f64) * 100.0

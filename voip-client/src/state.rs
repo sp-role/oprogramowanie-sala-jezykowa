@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const PORT_AUDIO: u16 = 5005;
 pub const PORT_DISCOVERY: u16 = 5006;
 pub const SAMPLE_RATE: u32 = 48000;
-pub const VAD_THRESHOLD: f32 = 0.025; // Progowanie głosu (~800 w 16-bit)
+pub const VAD_THRESHOLD: f32 = 0.015; // Progowanie głosu (~500 w 16-bit)
 pub const SERVER_TIMEOUT_SECS: f64 = 10.0; // Po ilu sekundach braku pakietów uznać serwer za rozłączony
 
 pub fn current_time() -> f64 {

@@ -1,11 +1,22 @@
+#[cfg(windows)]
 use is_elevated::is_elevated;
+#[cfg(windows)]
 use std::process::Command;
 use tauri::State;
-use crate::state::{PORT_AUDIO, PORT_DISCOVERY, SharedServerState};
+#[cfg(windows)]
+use crate::state::{PORT_AUDIO, PORT_DISCOVERY};
+use crate::state::SharedServerState;
 
 #[tauri::command]
 pub fn check_admin() -> bool {
-    is_elevated()
+    #[cfg(windows)]
+    {
+        is_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }
 
 #[tauri::command]
@@ -383,19 +394,26 @@ pub fn auto_pair_clients(mut rooms: Vec<String>, state: State<'_, SharedServerSt
         active_ips.swap(i, j);
     }
 
-    // Jeśli lista pokoi jest pusta, utwórz odpowiednią liczbę
-    if rooms.is_empty() {
-        let needed_rooms = (len + 1) / 2;
-        for i in 1..=needed_rooms.max(1) {
+    // Jeśli lista pokoi jest pusta, utwórz odpowiednią liczbę (zawsze parując lub tworząc trójkę zamiast 1-osobowego pokoju)
+    let num_rooms = if rooms.is_empty() {
+        let needed = if len >= 3 && len % 2 != 0 {
+            len / 2
+        } else {
+            (len + 1) / 2
+        };
+        for i in 1..=needed.max(1) {
             rooms.push(format!("Pokój {}", i));
         }
-    }
+        rooms.len()
+    } else {
+        let max_usable_rooms = if len <= 2 { 1 } else { len / 2 };
+        rooms.len().min(max_usable_rooms).max(1)
+    };
 
     // Wyczyść dotychczasowe przypisania
     st.groups.clear();
 
-    // Przypisz uczniów parami do kolejnych pokoi
-    let num_rooms = rooms.len();
+    // Przypisz uczniów parami; w przypadku nieparzystej liczby ostatni uczeń dołącza do ostatniego pokoju (tworząc trójkę)
     for (idx, ip) in active_ips.iter().enumerate() {
         let room_idx = (idx / 2).min(num_rooms - 1);
         let room_name = rooms[room_idx].clone();
@@ -508,7 +526,8 @@ pub fn window_toggle_maximize(window: tauri::Window) {
 }
 
 #[tauri::command]
-pub fn window_close(window: tauri::Window) {
+pub fn window_close(window: tauri::Window, state: State<'_, SharedServerState>) {
+    crate::network::broadcast_shutdown(&state);
     let _ = window.destroy();
 }
 
@@ -700,6 +719,12 @@ pub fn get_dashboard_data(
             });
         }
     }
+
+    active_clients.sort_by(|a, b| {
+        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.ip.cmp(&b.ip))
+    });
 
     let loss_percentage = if total_recv + total_lost > 0 {
         (total_lost as f64 / (total_recv + total_lost) as f64) * 100.0

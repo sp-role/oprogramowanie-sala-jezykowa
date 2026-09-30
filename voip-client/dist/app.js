@@ -502,6 +502,41 @@ function updateMicState(isSpeaking, isMutedByTeacher = false, isMicTest = false)
   }
 }
 
+function handleUsernameInput(val) {
+  const clean = val.trim();
+  const dn = document.getElementById('display-name');
+  if (dn) dn.innerText = clean || 'Uczeń';
+  updateAvatarUI();
+  if (clean && clean !== 'Uczeń') {
+    localStorage.setItem('voip_username', clean);
+    const joinInput = document.getElementById('join-name-input');
+    if (joinInput && document.activeElement !== joinInput) {
+      joinInput.value = clean;
+    }
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('set_username', { name: clean }).catch(() => {});
+    }
+  }
+}
+
+function preInitProfileInput() {
+  updateAvatarUI();
+  const savedName = (localStorage.getItem('voip_username') || '').trim();
+  if (savedName && savedName !== 'Uczeń') {
+    const input = document.getElementById('username-input');
+    if (input && document.activeElement !== input) input.value = savedName;
+    const dn = document.getElementById('display-name');
+    if (dn) dn.innerText = savedName;
+    const joinInput = document.getElementById('join-name-input');
+    if (joinInput && document.activeElement !== joinInput) joinInput.value = savedName;
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('set_username', { name: savedName }).catch(() => {});
+    }
+  }
+}
+
 function initStudentProfile() {
   updateAvatarUI();
   const savedName = (localStorage.getItem('voip_username') || '').trim();
@@ -510,11 +545,16 @@ function initStudentProfile() {
 
   if (savedName && savedName !== 'Uczeń') {
     const input = document.getElementById('username-input');
-    if (input) input.value = savedName;
+    if (input && document.activeElement !== input) input.value = savedName;
     const dn = document.getElementById('display-name');
     if (dn) dn.innerText = savedName;
     const joinInput = document.getElementById('join-name-input');
-    if (joinInput) joinInput.value = savedName;
+    if (joinInput && document.activeElement !== joinInput) joinInput.value = savedName;
+
+    const tauri = getTauri();
+    if (tauri && tauri.invoke) {
+      tauri.invoke('set_username', { name: savedName }).catch(() => {});
+    }
   }
 }
 
@@ -602,20 +642,26 @@ function renderSkypeGrid(data) {
   };
 
   // 2. Inni uczestnicy z pokoju
-  const otherMembers = (data.room_members || [])
-    .filter((m) => !m.is_self)
-    .map((m) => {
-      const parsed = parseUserAvatarAndName(m.name);
-      return {
-        name: parsed.name,
-        initials: parsed.initials,
-        palette: getDeterministicPalette(parsed.name),
-        is_speaking: m.is_speaking,
-        is_muted: data.is_muted_by_teacher,
-        is_self: false,
-        hand_raised: m.hand_raised,
-      };
+  let foundSelfInList = false;
+  const otherMembers = [];
+
+  for (const m of (data.room_members || [])) {
+    const isSelfMember = m.is_self || (!foundSelfInList && m.name.trim().toLowerCase() === rawSelfName.toLowerCase());
+    if (isSelfMember && !foundSelfInList) {
+      foundSelfInList = true;
+      continue;
+    }
+    const parsed = parseUserAvatarAndName(m.name);
+    otherMembers.push({
+      name: parsed.name,
+      initials: parsed.initials,
+      palette: getDeterministicPalette(parsed.name),
+      is_speaking: m.is_speaking,
+      is_muted: data.is_muted_by_teacher,
+      is_self: false,
+      hand_raised: m.hand_raised,
     });
+  }
 
   const allCards = [selfCard, ...otherMembers];
 
@@ -759,32 +805,56 @@ async function toggleSelfMute() {
 
 async function handleHangupClick() {
   const tauri = getTauri();
+  isJoinedState = false;
+  wasPreviouslyConnected = false;
+
+  const viewLobby = document.getElementById('view-lobby');
+  const viewSkype = document.getElementById('view-skype-call');
+  if (viewLobby) viewLobby.classList.remove('hidden');
+  if (viewSkype) viewSkype.classList.add('hidden');
+
+  const ipElem = document.getElementById('server-ip');
+  if (ipElem) ipElem.innerText = 'Szukanie serwera...';
+  const groupElem = document.getElementById('group-name');
+  if (groupElem) groupElem.innerText = 'Poczekalnia';
+  const roomBadge = document.getElementById('room-badge');
+  if (roomBadge) {
+    roomBadge.innerText = 'Poczekalnia';
+    roomBadge.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500';
+  }
+  const badge = document.getElementById('status-badge');
+  if (badge) {
+    badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span><span>Szukanie...</span>';
+    badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200';
+  }
+
+  showToast('Rozłączono z serwerem. Wyszukiwanie...', 'info');
+
   if (tauri && tauri.invoke) {
     try {
-      await tauri.invoke('leave_room');
-      showToast('Opuszczono pokój. Powrót do Poczekalni.', 'info');
-      const viewLobby = document.getElementById('view-lobby');
-      const viewSkype = document.getElementById('view-skype-call');
-      if (viewLobby) viewLobby.classList.remove('hidden');
-      if (viewSkype) viewSkype.classList.add('hidden');
-      const groupElem = document.getElementById('group-name');
-      if (groupElem) groupElem.innerText = 'Poczekalnia';
-      const roomBadge = document.getElementById('room-badge');
-      if (roomBadge) {
-        roomBadge.innerText = 'Poczekalnia';
-        roomBadge.className = 'text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500';
-      }
+      await tauri.invoke('leave_lesson');
     } catch (e) {
-      console.error('Błąd leave_room:', e);
+      console.error('Błąd leave_lesson:', e);
     }
   }
 }
 
+let wasPreviouslyConnected = null;
+
 function applyClientStatus(data) {
   if (!data) return;
 
-  const isJoined = data.is_joined !== undefined ? data.is_joined : isJoinedState;
+  if (wasPreviouslyConnected === true && !data.connected) {
+    isJoinedState = false;
+    showToast('Połączenie z serwerem zostało zakończone', 'info');
+  }
+  wasPreviouslyConnected = !!data.connected;
+
   const isRoom = data.group && data.group !== 'Poczekalnia' && data.group !== 'Brak' && data.group !== 'Zablokowany';
+  const isJoined = ((data.is_joined !== undefined ? data.is_joined : isJoinedState) || isRoom) && data.connected;
+  if (isRoom && !isJoinedState && data.connected) {
+    isJoinedState = true;
+  }
   const groupDisplay = isRoom ? data.group : 'Poczekalnia';
 
   const viewLobby = document.getElementById('view-lobby');
@@ -1522,6 +1592,7 @@ async function checkAndPromptFirewall() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  preInitProfileInput();
   initClientListener();
   initClientAppVersion();
   initSavedAudioSettings();
