@@ -1,8 +1,8 @@
 {
-  "version": "1.0.0",
-  "latest_version": "1.0.0",
-  "release_date": "2026-09-27",
-  "changelog": "- Udoskonalony system transmisji audio w salach lekcyjnych\n- Inteligentne wskaźniki aktywności mikrofonów (VAD)\n- Zabezpieczenie licencyjne powiązane ze sprzętem\n- Zintegrowany automatyczny system aktualizacji",
+  "version": "1.0.1",
+  "latest_version": "1.0.1",
+  "release_date": "2026-09-30",
+  "changelog": "- Zaawansowane ramkowanie audio 20ms i eliminacja przerywania dźwięku\n- Bufor wyprzedzający mowy (pre-roll 50ms) i wydłużony VAD hangover\n- Płynny Jitter Buffer z adaptacyjnym pre-bufferingiem 30ms\n- Poprawki widoczności członków w pokojach lekcyjnych\n- Natychmiastowa responsywność wpisywania nazwy użytkownika",
   "server_url": "https://github.com/sp-role/oprogramowanie-sala-jezykowa/releases/latest",
   "client_url": "https://github.com/sp-role/oprogramowanie-sala-jezykowa/releases/latest",
   "is_mandatory": false

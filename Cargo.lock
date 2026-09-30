@@ -5332,7 +5332,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voip-client"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "byteorder",
  "cpal",
@@ -5351,7 +5351,7 @@ dependencies = [
 
 [[package]]
 name = "voip-server"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "byteorder",
  "cpal",

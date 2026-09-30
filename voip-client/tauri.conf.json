@@ -44,6 +44,6 @@
     }
   },
   "identifier": "com.pracownia.voip.client",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "productName": "VoIP Client"
 }
